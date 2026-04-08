@@ -94,7 +94,7 @@ function main(workbook: ExcelScript.Workbook) {
     }
 
     // -----------------------------------------------
-    // ✅ Rule 5: Project Food Pak / PFP (CORRECTED)
+    // Rule 5: Project Food Pak / PFP
     // -----------------------------------------------
     if (original.includes("Project Food Pak") || original.includes("PFP")) {
 
@@ -123,7 +123,7 @@ function main(workbook: ExcelScript.Workbook) {
         continue;
       }
 
-      // Contains Distribution Center
+      // Contains Distribution Center or (Classy)
       if (
         betweenText.includes("Distribution Center") ||
         betweenText.includes("(Classy)")
