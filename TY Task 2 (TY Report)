@@ -1,0 +1,125 @@
+function main(workbook: ExcelScript.Workbook) {
+
+    // ================= CONFIGURATION =================
+    const STATUS_VALUE = "Not Started";
+
+    const COLUMNS_TO_DELETE = [
+        "Activity ID",
+        "Status",
+        "Subject",
+        "Date",
+        "Subject Description"
+    ];
+
+    const VALID_US_STATES = new Set<string>([
+        "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+        "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+        "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+        "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+        "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+        "DC"
+    ]);
+
+    // ================= HELPERS =================
+    const normalizeHeaders = (
+        row: (string | number | boolean)[]
+    ): string[] =>
+        row.map((h) => typeof h === "string" ? h.trim() : "");
+
+    // ================= INITIAL LOAD =================
+    const sheet = workbook.getActiveWorksheet();
+    const usedRange = sheet.getUsedRange();
+    if (!usedRange) return;
+
+    const values = usedRange.getValues();
+    const headers = normalizeHeaders(values[0]);
+    const rowCount = values.length;
+
+    const getColumnIndex = (name: string): number =>
+        headers.indexOf(name);
+
+    // ================= STATUS UPDATE =================
+    const statusCol = getColumnIndex("Status");
+    if (statusCol !== -1) {
+        for (let r = 1; r < rowCount; r++) {
+            values[r][statusCol] = STATUS_VALUE;
+        }
+    }
+
+    usedRange.setValues(values);
+
+    // ================= DELETE COLUMNS =================
+    const deleteIndexes = COLUMNS_TO_DELETE
+        .map((name) => getColumnIndex(name))
+        .filter((i) => i !== -1)
+        .sort((a, b) => b - a);
+
+    for (const colIndex of deleteIndexes) {
+        sheet
+            .getRangeByIndexes(0, colIndex, rowCount, 1)
+            .delete(ExcelScript.DeleteShiftDirection.left);
+    }
+
+    // ================= RELOAD AFTER DELETE =================
+    const refreshedRange = sheet.getUsedRange();
+    if (!refreshedRange) return;
+
+    const refreshedValues = refreshedRange.getValues();
+    const refreshedHeaders = normalizeHeaders(refreshedValues[0]);
+
+    // ================= INVALID STATE HIGHLIGHT =================
+    const stateCol = refreshedHeaders.indexOf("Billing State/Province");
+    if (stateCol !== -1) {
+        for (let r = 1; r < refreshedValues.length; r++) {
+            const state = refreshedValues[r][stateCol];
+
+            if (
+                typeof state !== "string" ||
+                !VALID_US_STATES.has(state.trim().toUpperCase())
+            ) {
+                sheet
+                    .getRangeByIndexes(r, 0, 1, refreshedHeaders.length)
+                    .getFormat()
+                    .getFill()
+                    .setColor("#F8D7DA");
+            }
+        }
+    }
+
+    // ================= MOVE COMMENTS COLUMN TO END =================
+    const finalUsedRange = sheet.getUsedRange();
+    if (!finalUsedRange) return;
+
+    const finalValues = finalUsedRange.getValues();
+    const finalHeaders = normalizeHeaders(finalValues[0]);
+
+    const commentsColIndex = finalHeaders.indexOf("Comments");
+    const totalRows = finalValues.length;
+    const totalCols = finalHeaders.length;
+
+    if (commentsColIndex !== -1 && commentsColIndex !== totalCols - 1) {
+
+        const commentsRange = sheet.getRangeByIndexes(
+            0, commentsColIndex, totalRows, 1
+        );
+
+        const targetRange = sheet.getRangeByIndexes(
+            0, totalCols, totalRows, 1
+        );
+
+        targetRange.copyFrom(
+            commentsRange,
+            ExcelScript.RangeCopyType.all,
+            false,
+            false
+        );
+
+        commentsRange.delete(ExcelScript.DeleteShiftDirection.left);
+    }
+
+    // ================= FINAL FORMATTING =================
+    const format = finalUsedRange.getFormat();
+    format.setWrapText(false);
+    format.autofitColumns();
+    format.autofitRows();
+}
