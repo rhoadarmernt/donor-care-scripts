@@ -16,6 +16,9 @@ function main(workbook: ExcelScript.Workbook) {
   // ✅ EASY-TO-EDIT PHRASE LISTS
   // ====================================================
 
+  // Change this to match the current month range
+  const SCRIPT_MONTHS = "Jan-April";
+
   const GENERAL_PHRASES = [
     // Add phrases from other Script below. Make sure to delete when you're done running the program
    
@@ -43,7 +46,7 @@ function main(workbook: ExcelScript.Workbook) {
     // Rule 1: General TY Script
     // -----------------------------------------------
     if (GENERAL_PHRASES.some(p => original.includes(p))) {
-      values[r][commentsCol] = "General TY Script: Jan-April";
+      values[r][commentsCol] = `General TY Script: ${SCRIPT_MONTHS}`;
       continue;
     }
 
@@ -51,7 +54,7 @@ function main(workbook: ExcelScript.Workbook) {
     // Rule 2: Hope Partners
     // -----------------------------------------------
     if (original.includes("Hope Partners")) {
-      values[r][commentsCol] = "Recurring TY Script: Jan-April";
+      values[r][commentsCol] = `Recurring TY Script: ${SCRIPT_MONTHS}`;
       continue;
     }
 
@@ -66,7 +69,7 @@ function main(workbook: ExcelScript.Workbook) {
         if (dollarMatch) {
           const amount = parseInt(dollarMatch[1].replace(/,/g, ""));
           values[r][commentsCol] =
-            `PCP TY Script: Jan-April (${amount * 4} meals)`;
+            `PCP TY Script: ${SCRIPT_MONTHS} (${amount * 4} meals)`;
           continue;
         }
       }
@@ -85,7 +88,7 @@ function main(workbook: ExcelScript.Workbook) {
           original.substring(startIndex + marker.length, gauIndex).trim();
 
         values[r][commentsCol] =
-          `VFP TY Script: Jan-April (${extracted})`;
+          `VFP TY Script: ${SCRIPT_MONTHS} (${extracted})`;
         continue;
       }
     }
@@ -116,7 +119,7 @@ function main(workbook: ExcelScript.Workbook) {
 
       // No text between "Campaign:" and PFP phrase
       if (betweenText === "") {
-        values[r][commentsCol] = "PFP TY Script: Jan-April";
+        values[r][commentsCol] = `PFP TY Script: ${SCRIPT_MONTHS}`;
         continue;
       }
 
@@ -125,7 +128,7 @@ function main(workbook: ExcelScript.Workbook) {
         betweenText.includes("Distribution Center") ||
         betweenText.includes("(Classy)")
       ) {
-        values[r][commentsCol] = "PFP TY Script: Jan-April";
+        values[r][commentsCol] = `PFP TY Script: ${SCRIPT_MONTHS}`;
         continue;
       }
 
@@ -139,7 +142,7 @@ function main(workbook: ExcelScript.Workbook) {
         .trim();
 
       values[r][commentsCol] =
-        `PFP TY Script: Jan-April (${betweenText})`;
+        `PFP TY Script: ${SCRIPT_MONTHS} (${betweenText})`;
       continue;
     }
   }
