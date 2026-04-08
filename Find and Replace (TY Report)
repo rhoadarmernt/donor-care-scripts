@@ -18,19 +18,13 @@ function main(workbook: ExcelScript.Workbook) {
 
   const GENERAL_PHRASES = [
     // Add phrases from other Script below. Make sure to delete when you're done running the program
-    "2025 Giving Tuesday",
-    "2026-02 SWDAL Central Christian Church",
-    "2512SLA_3",
-    "2603SLA_1",
-    "2603SLB_1",
-    "35 Year Anniversary Donation-3.5 Million Meal Goal",
+   
+    // Keep these
+    "Giving Tuesday",
     "Annual Funding",
-    "CTLG - WEB Bulk Food (Classy Popup)",
     "Donation Acknowledgement Reply Device",
     "Main Donation Page",
-    "T2025",
-    "YE 2025 Landing Page",
-    // Keep these
+    "Landing Page",
     "Where Most Needed",
     "Summer Acquisition"
   ];
