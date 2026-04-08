@@ -1,0 +1,72 @@
+function main(workbook: ExcelScript.Workbook) {
+
+  const sheet = workbook.getActiveWorksheet();
+  const usedRange = sheet.getUsedRange();
+  if (!usedRange) {
+    console.log("No data found.");
+    return;
+  }
+
+  const values = usedRange.getValues();
+  const headers = values[0] as string[];
+
+  const commentsCol = headers.indexOf("Comments");
+  if (commentsCol === -1) {
+    console.log("❌ 'Comments' column not found.");
+    return;
+  }
+
+  // ✅ Campaigns to EXCLUDE if found anywhere in the name
+  const EXCLUDED_PHRASES = [
+    "Where Most Needed",
+    "Summer Acquisition",
+    "Hope Partners",
+    "Project Coin Pak",
+    "Virtual Food Paks",
+    "Project Food Pak",
+    "PFP"
+  ];
+
+  const campaigns = new Set<string>();
+
+  for (let r = 1; r < values.length; r++) {
+    const cell = values[r][commentsCol];
+    if (typeof cell !== "string") continue;
+
+    const campaignIndex = cell.indexOf("Campaign:");
+    const gauIndex = cell.indexOf("GAU:");
+
+    if (
+      campaignIndex !== -1 &&
+      gauIndex !== -1 &&
+      gauIndex > campaignIndex
+    ) {
+      let extracted =
+        cell.substring(campaignIndex + 9, gauIndex)
+          .trim()
+          .replace(/\s{2,}/g, " ");
+
+      if (extracted === "") continue;
+
+      // ❌ Skip excluded campaigns
+      if (EXCLUDED_PHRASES.some(p => extracted.includes(p))) {
+        continue;
+      }
+
+      campaigns.add(extracted);
+    }
+  }
+
+  const campaignList = Array.from(campaigns).sort();
+
+  // ✅ READY-TO-PASTE OUTPUT
+  console.log("✅ READY-TO-PASTE GENERAL_PHRASES (EXCLUSIONS APPLIED)");
+  console.log("================================");
+
+  campaignList.forEach(c => {
+    console.log(`"${c}",`);
+  });
+
+  console.log("================================");
+  console.log(`Total campaigns output: ${campaignList.length}`);
+}
