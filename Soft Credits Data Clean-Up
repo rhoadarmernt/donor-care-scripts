@@ -1,0 +1,103 @@
+function main(workbook: ExcelScript.Workbook) {
+    // ==========================
+    // EDIT THESE HEADERS AS NEEDED
+    // ==========================
+    const EMAIL_HEADER = "Email";
+    const NAME_HEADER = "Full Name";
+    const AMOUNT_HEADER = "Net Amount";
+
+    const sheet = workbook.getActiveWorksheet();
+    const range = sheet.getUsedRange(true);
+    if (!range) return;
+
+    const values = range.getValues();
+    const headers = values[0] as string[];
+    const rowCount = values.length;
+    const colCount = headers.length;
+
+    // ==========================
+    // RESOLVE COLUMN INDEXES
+    // ==========================
+    const emailCol = headers.indexOf(EMAIL_HEADER);
+    const nameCol = headers.indexOf(NAME_HEADER);
+    const amountCol = headers.indexOf(AMOUNT_HEADER);
+
+    if (emailCol === -1) {
+        throw new Error(`Header not found: ${EMAIL_HEADER}`);
+    }
+    if (nameCol === -1) {
+        throw new Error(`Header not found: ${NAME_HEADER}`);
+    }
+    if (amountCol === -1) {
+        throw new Error(`Header not found: ${AMOUNT_HEADER}`);
+    }
+
+    // ==========================
+    // ANALYZE DATA (NO EDITS)
+    // ==========================
+    const output: (string | number)[][] = [];
+    const rowsToHide = new Set<number>();
+
+    let r = 1;
+    while (r < rowCount) {
+        const email = String(values[r][emailCol] ?? "").trim();
+        if (!email) {
+            r++;
+            continue;
+        }
+
+        const start = r;
+        const names = new Set<string>();
+        let total = 0;
+
+        while (
+            r < rowCount &&
+            String(values[r][emailCol] ?? "").trim() === email
+        ) {
+            names.add(String(values[r][nameCol] ?? "").trim());
+            total += Number(values[r][amountCol]) || 0;
+            r++;
+        }
+
+        const groupSize = r - start;
+        const shouldAggregate =
+            groupSize > 1 &&
+            (email === "Anonymous" || names.size === 1);
+
+        if (shouldAggregate) {
+            const row: (string | number)[] = Array(colCount).fill("");
+            row[emailCol] = email;
+            if (email !== "Anonymous") {
+                row[nameCol] = Array.from(names)[0];
+            }
+            row[amountCol] = total;
+
+            output.push(row);
+
+            // Mark original rows for hiding
+            for (let i = start; i < r; i++) {
+                rowsToHide.add(i + 1); // Excel rows are 1-based
+            }
+        }
+    }
+
+    // ==========================
+    // APPEND TOTALS AT BOTTOM
+    // ==========================
+    if (output.length > 0) {
+        sheet
+            .getRangeByIndexes(rowCount, 0, output.length, colCount)
+            .setValues(output);
+    }
+
+    // ==========================
+    // HIDE COMBINED ROWS
+    // ==========================
+    rowsToHide.forEach(rowNum => {
+        sheet.getRange(`A${rowNum}`).getEntireRow().setRowHidden(true);
+    });
+
+    console.log(
+        `Appended ${output.length} totals and hid ${rowsToHide.size} source rows.`
+    );
+}
