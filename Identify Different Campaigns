@@ -18,6 +18,11 @@ function main(workbook: ExcelScript.Workbook) {
 
   // ✅ Campaigns to EXCLUDE if found anywhere in the name
   const EXCLUDED_PHRASES = [
+    "Giving Tuesday",
+    "Annual Funding",
+    "Donation Acknowledgement Reply Device",
+    "Main Donation Page",
+    "Landing Page",
     "Where Most Needed",
     "Summer Acquisition",
     "Hope Partners",
