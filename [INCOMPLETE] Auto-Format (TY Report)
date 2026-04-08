@@ -77,6 +77,33 @@ function main(workbook: ExcelScript.Workbook) {
     }
   }
 
+  // ======== NORMALIZE "ACCOUNT REGION" VALUES ========
+  const accountRegionCol = getColumnIndex("Account Region");
+
+  if (accountRegionCol !== -1) {
+    for (let r = 1; r < rowCount; r++) {
+      const cellValue = values[r][accountRegionCol];
+
+      if (typeof cellValue === "string") {
+        const trimmedValue = cellValue.trim();
+
+        if (trimmedValue === "Southwest - San Antonio") {
+          values[r][accountRegionCol] = "SWSA";
+        } else if (trimmedValue === "West") {
+          values[r][accountRegionCol] = "WEST";
+        } else if (
+          trimmedValue === "Southwest - Dallas" ||
+          trimmedValue === "Southwest"
+        ) {
+          values[r][accountRegionCol] = "SWDAL";
+        } else {
+          // Anything else
+          values[r][accountRegionCol] = "HQ";
+        }
+    }
+  }
+  }
+
     // ======== DELETE COLUMNS (RIGHT → LEFT) ========
     const deleteIndexes = COLUMNS_TO_DELETE
         .map(columnName => getColumnIndex(columnName))
@@ -113,4 +140,16 @@ function main(workbook: ExcelScript.Workbook) {
                 .setColor("#F8D7DA"); // light red
         }
     }
+  // ======== TURN OFF WRAP TEXT & AUTOFIT ========
+  const finalRange = sheet.getUsedRange();
+  if (finalRange) {
+    const format = finalRange.getFormat();
+
+    // Disable wrap text for all cells
+    format.setWrapText(false);
+
+    // AutoFit for clean layout
+    format.autofitColumns();
+    format.autofitRows();
+  }
 }
