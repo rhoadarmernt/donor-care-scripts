@@ -1,0 +1,94 @@
+function main(workbook: ExcelScript.Workbook) {
+
+  const sheet = workbook.getActiveWorksheet();
+  const usedRange = sheet.getUsedRange();
+  if (!usedRange) return;
+
+  const values = usedRange.getValues();
+  const rowCount = values.length;
+
+  const headers = values[0].map(h =>
+    typeof h === "string" ? h.trim() : ""
+  );
+
+  const getColumnIndex = (name: string): number =>
+    headers.indexOf(name);
+
+  // ===== STATUS COLUMN =====
+  const statusCol = getColumnIndex("Status");
+  if (statusCol !== -1) {
+    for (let r = 1; r < rowCount; r++) {
+      values[r][statusCol] = "Not started";
+    }
+  }
+
+  // ===== DATE COLUMN (+ 7 DAYS) =====
+  const dateCol = getColumnIndex("Date");
+  if (dateCol !== -1) {
+
+    const today = new Date();
+    const oneWeekFromToday = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() + 7
+    );
+
+    // Convert JS Date → Excel date number
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    const excelDate =
+      (oneWeekFromToday.getTime() - excelEpoch.getTime()) /
+      (1000 * 60 * 60 * 24);
+
+    for (let r = 1; r < rowCount; r++) {
+      values[r][dateCol] = excelDate;
+    }
+  }
+
+  // ===== WRITE VALUES BACK =====
+  usedRange.setValues(values);
+
+  // ===== FORMAT DATE =====
+  if (dateCol !== -1) {
+    sheet
+      .getRangeByIndexes(1, dateCol, rowCount - 1, 1)
+      .setNumberFormat([["mm/dd/yyyy"]]);
+  }
+
+  // ===== CHECK FOR DUPLICATES (ACCOUNT NAME) =====
+  const accountNameCol = getColumnIndex("Account Name");
+  const nameCounts = new Map<string, number>();
+
+  if (accountNameCol !== -1) {
+    for (let r = 1; r < rowCount; r++) {
+      const name = values[r][accountNameCol];
+      if (typeof name === "string" && name.trim() !== "") {
+        const key = name.trim().toUpperCase();
+        nameCounts.set(key, (nameCounts.get(key) ?? 0) + 1);
+      }
+    }
+
+    // Highlight duplicate rows
+    for (let r = 1; r < rowCount; r++) {
+      const name = values[r][accountNameCol];
+      if (
+        typeof name === "string" &&
+        nameCounts.get(name.trim().toUpperCase())! > 1
+      ) {
+        sheet
+          .getRangeByIndexes(r, 0, 1, headers.length)
+          .getFormat()
+          .getFill()
+          .setColor("#FFF3CD"); // light yellow
+      }
+    }
+  }
+
+  // ===== FINAL FORMATTING =====
+  const finalRange = sheet.getUsedRange();
+  if (finalRange) {
+    const format = finalRange.getFormat();
+    format.setWrapText(false);
+    format.autofitColumns();
+    format.autofitRows();
+  }
+}
