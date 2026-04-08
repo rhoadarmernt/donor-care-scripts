@@ -1,154 +1,171 @@
 function main(workbook: ExcelScript.Workbook) {
 
-    // ======== CONFIGURATION ========
-    const STATUS_VALUE = "Your Desired Status";
+  // ================= CONFIGURATION =================
+  const STATUS_VALUE = "Not Started";
 
-    const COLUMNS_TO_DELETE = [
-        "Activity ID",
-        "Subject",
-        "Created By",
-        "Gift Officer",
-        "Committed Donor Officer",
-        "Account ID"
-    ];
+  const COLUMNS_TO_DELETE = [
+    "Activity ID",
+    "Subject",
+    "Created By",
+    "Gift Officer",
+    "Committed Donor Officer",
+    "Account ID"
+  ];
 
-    const VALID_US_STATES = new Set([
-        "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
-        "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
-        "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
-        "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
-        "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
-        "DC"
-    ]);
+  const VALID_US_STATES = new Set([
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+    "DC"
+  ]);
 
-    // ======== GET DATA ========
-    const sheet = workbook.getActiveWorksheet();
-    const usedRange = sheet.getUsedRange();
-    if (!usedRange) return;
+  // ================= HELPERS =================
+  function jsDateToExcelDate(date: Date): number {
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    return (date.getTime() - excelEpoch.getTime()) / (1000 * 60 * 60 * 24);
+  }
 
-    const values = usedRange.getValues();
-    const rowCount = values.length;
-    const colCount = values[0].length;
+  // ================= INITIAL LOAD =================
+  const sheet = workbook.getActiveWorksheet();
+  const usedRange = sheet.getUsedRange();
+  if (!usedRange) return;
 
-    const headers = values[0].map(h =>
-        typeof h === "string" ? h.trim() : ""
-    );
+  const values = usedRange.getValues();
+  const rowCount = values.length;
 
-    // ======== HELPERS ========
-    const getColumnIndex = (name: string): number =>
-        headers.findIndex(h => h === name);
+  const headers = values[0].map(h =>
+    typeof h === "string" ? h.trim() : ""
+  );
 
-    // ======== UPDATE STATUS COLUMN ========
-    const statusCol = getColumnIndex("Status");
-    if (statusCol !== -1) {
-        for (let r = 1; r < rowCount; r++) {
-            values[r][statusCol] = STATUS_VALUE;
-        }
+  const getColumnIndex = (name: string): number =>
+    headers.indexOf(name);
+
+  // ================= STATUS UPDATE =================
+  const statusCol = getColumnIndex("Status");
+  if (statusCol !== -1) {
+    for (let r = 1; r < rowCount; r++) {
+      values[r][statusCol] = STATUS_VALUE;
     }
+  }
 
-    // ======== WRITE STATUS CHANGES ========
-    usedRange.setValues(values);
-
-  // ======== TRANSFORM "ACCOUNT NAME" HOUSEHOLD VALUES ========
+  // ================= ACCOUNT NAME (HOUSEHOLD) =================
   const accountNameCol = getColumnIndex("Account Name");
-
   if (accountNameCol !== -1) {
     for (let r = 1; r < rowCount; r++) {
-      const cellValue = values[r][accountNameCol];
+      const cell = values[r][accountNameCol];
 
-      if (typeof cellValue === "string" && cellValue.includes("Household")) {
+      if (typeof cell === "string" && cell.includes("Household")) {
+        const openParen = cell.indexOf("(");
+        const closeParen = cell.indexOf(")");
 
-        const openParen = cellValue.indexOf("(");
-        const closeParen = cellValue.indexOf(")");
-
-        if (openParen !== -1 && closeParen !== -1 && closeParen > openParen) {
-
-          const insideParens = cellValue
-            .substring(openParen + 1, closeParen)
-            .trim();
-
-          const beforeParens = cellValue
-            .substring(0, openParen)
-            .trim();
-
-          values[r][accountNameCol] = `${insideParens} ${beforeParens}`;
+        if (openParen !== -1 && closeParen > openParen) {
+          const inside = cell.substring(openParen + 1, closeParen).trim();
+          const before = cell.substring(0, openParen).trim();
+          values[r][accountNameCol] = `${inside} ${before}`;
         }
       }
     }
   }
 
-  // ======== NORMALIZE "ACCOUNT REGION" VALUES ========
+  // ================= ACCOUNT REGION =================
   const accountRegionCol = getColumnIndex("Account Region");
-
   if (accountRegionCol !== -1) {
     for (let r = 1; r < rowCount; r++) {
-      const cellValue = values[r][accountRegionCol];
+      const cell = values[r][accountRegionCol];
 
-      if (typeof cellValue === "string") {
-        const trimmedValue = cellValue.trim();
+      if (typeof cell === "string") {
+        const trimmed = cell.trim();
 
-        if (trimmedValue === "Southwest - San Antonio") {
+        if (trimmed === "Southwest - San Antonio") {
           values[r][accountRegionCol] = "SWSA";
-        } else if (trimmedValue === "West") {
+        } else if (trimmed === "West") {
           values[r][accountRegionCol] = "WEST";
         } else if (
-          trimmedValue === "Southwest - Dallas" ||
-          trimmedValue === "Southwest"
+          trimmed === "Southwest - Dallas" ||
+          trimmed === "Southwest"
         ) {
           values[r][accountRegionCol] = "SWDAL";
         } else {
-          // Anything else
           values[r][accountRegionCol] = "HQ";
         }
+      }
     }
   }
-  }
 
-    // ======== DELETE COLUMNS (RIGHT → LEFT) ========
-    const deleteIndexes = COLUMNS_TO_DELETE
-        .map(columnName => getColumnIndex(columnName))
-        .filter(i => i !== -1)
-        .sort((a, b) => b - a);
-
-    for (const colIndex of deleteIndexes) {
-        sheet.getRangeByIndexes(0, colIndex, rowCount, 1).delete(ExcelScript.DeleteShiftDirection.left);
-    }
-
-    // ======== RELOAD RANGE AFTER DELETIONS ========
-    const refreshedRange = sheet.getUsedRange();
-    if (!refreshedRange) return;
-
-    const refreshedValues = refreshedRange.getValues();
-    const refreshedHeaders = refreshedValues[0].map(h =>
-        typeof h === "string" ? h.trim() : ""
+  // ================= DATE (+ 7 DAYS) =================
+  const dateCol = getColumnIndex("Date");
+  if (dateCol !== -1) {
+    const today = new Date();
+    const oneWeekFromToday = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() + 7
     );
 
-    const billingStateCol = refreshedHeaders.indexOf("Billing State/Province");
-    if (billingStateCol === -1) return;
+    const excelDate = jsDateToExcelDate(oneWeekFromToday);
 
-    // ======== HIGHLIGHT INVALID STATES ========
-    for (let r = 1; r < refreshedValues.length; r++) {
-        const cellValue = refreshedValues[r][billingStateCol];
-
-        if (typeof cellValue !== "string" ||
-            !VALID_US_STATES.has(cellValue.trim().toUpperCase())) {
-
-            sheet
-                .getRangeByIndexes(r, 0, 1, refreshedValues[0].length)
-                .getFormat()
-                .getFill()
-                .setColor("#F8D7DA"); // light red
-        }
+    for (let r = 1; r < rowCount; r++) {
+      values[r][dateCol] = excelDate;
     }
-  // ======== TURN OFF WRAP TEXT & AUTOFIT ========
+  }
+
+  // ================= WRITE VALUES =================
+  usedRange.setValues(values);
+
+  // ================= FORMAT DATE =================
+  if (dateCol !== -1) {
+    const dateRange = sheet.getRangeByIndexes(1, dateCol, rowCount - 1, 1);
+    dateRange.setNumberFormat([["mm/dd/yyyy"]]);
+  }
+
+  // ================= DELETE COLUMNS =================
+  const deleteIndexes = COLUMNS_TO_DELETE
+    .map(name => getColumnIndex(name))
+    .filter(i => i !== -1)
+    .sort((a, b) => b - a);
+
+  for (const colIndex of deleteIndexes) {
+    sheet
+      .getRangeByIndexes(0, colIndex, rowCount, 1)
+      .delete(ExcelScript.DeleteShiftDirection.left);
+  }
+
+  // ================= RELOAD AFTER DELETE =================
+  const refreshedRange = sheet.getUsedRange();
+  if (!refreshedRange) return;
+
+  const refreshedValues = refreshedRange.getValues();
+  const refreshedHeaders = refreshedValues[0].map(h =>
+    typeof h === "string" ? h.trim() : ""
+  );
+
+  const stateCol = refreshedHeaders.indexOf("Billing State/Province");
+
+  // ================= INVALID STATE HIGHLIGHT =================
+  if (stateCol !== -1) {
+    for (let r = 1; r < refreshedValues.length; r++) {
+      const state = refreshedValues[r][stateCol];
+
+      if (
+        typeof state !== "string" ||
+        !VALID_US_STATES.has(state.trim().toUpperCase())
+      ) {
+        sheet
+          .getRangeByIndexes(r, 0, 1, refreshedValues[0].length)
+          .getFormat()
+          .getFill()
+          .setColor("#F8D7DA");
+      }
+    }
+  }
+
+  // ================= FINAL FORMATTING =================
   const finalRange = sheet.getUsedRange();
   if (finalRange) {
     const format = finalRange.getFormat();
-
-    // Disable wrap text for all cells
     format.setWrapText(false);
-
-    // AutoFit for clean layout
     format.autofitColumns();
     format.autofitRows();
   }
