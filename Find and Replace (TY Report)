@@ -1,0 +1,154 @@
+function main(workbook: ExcelScript.Workbook) {
+
+  const sheet = workbook.getActiveWorksheet();
+  const usedRange = sheet.getUsedRange();
+  if (!usedRange) return;
+
+  const values = usedRange.getValues();
+  const headers = values[0] as string[];
+
+  const commentsCol = headers.indexOf("Comments");
+  if (commentsCol === -1) {
+    throw new Error("❌ 'Comments' column not found.");
+  }
+
+  // ====================================================
+  // ✅ EASY-TO-EDIT PHRASE LISTS
+  // ====================================================
+
+  const GENERAL_PHRASES = [
+    // Add phrases from other Script below. Make sure to delete when you're done running the program
+    "2025 Giving Tuesday",
+    "2026-02 SWDAL Central Christian Church",
+    "2512SLA_3",
+    "2603SLA_1",
+    "2603SLB_1",
+    "35 Year Anniversary Donation-3.5 Million Meal Goal",
+    "Annual Funding",
+    "CTLG - WEB Bulk Food (Classy Popup)",
+    "Donation Acknowledgement Reply Device",
+    "Main Donation Page",
+    "T2025",
+    "YE 2025 Landing Page",
+    // Keep these
+    "Where Most Needed",
+    "Summer Acquisition"
+  ];
+
+  // ====================================================
+  // 🔁 PROCESS EACH COMMENT CELL
+  // ====================================================
+
+  for (let r = 1; r < values.length; r++) {
+    let comment = values[r][commentsCol];
+    if (typeof comment !== "string") continue;
+
+    const original = comment;
+
+    // -----------------------------------------------
+    // Rule 1: General TY Script
+    // -----------------------------------------------
+    if (GENERAL_PHRASES.some(p => original.includes(p))) {
+      values[r][commentsCol] = "General TY Script: Jan-April";
+      continue;
+    }
+
+    // -----------------------------------------------
+    // Rule 2: Hope Partners
+    // -----------------------------------------------
+    if (original.includes("Hope Partners")) {
+      values[r][commentsCol] = "Recurring TY Script: Jan-April";
+      continue;
+    }
+
+    // -----------------------------------------------
+    // Rule 3: Project Coin Pak
+    // -----------------------------------------------
+    if (original.includes("Project Coin Pak")) {
+      const descIndex = original.indexOf("Description:");
+      if (descIndex !== -1) {
+        const afterDesc = original.substring(descIndex);
+        const dollarMatch = afterDesc.match(/\$([\d,]+)/);
+        if (dollarMatch) {
+          const amount = parseInt(dollarMatch[1].replace(/,/g, ""));
+          values[r][commentsCol] =
+            `PCP TY Script: Jan-April (${amount * 4} meals)`;
+          continue;
+        }
+      }
+    }
+
+    // -----------------------------------------------
+    // Rule 4: Virtual Food Paks
+    // -----------------------------------------------
+    if (original.includes("Virtual Food Paks")) {
+      const marker = "Paks for ";
+      const startIndex = original.indexOf(marker);
+      const gauIndex = original.indexOf("GAU:");
+
+      if (startIndex !== -1 && gauIndex !== -1 && gauIndex > startIndex) {
+        const extracted =
+          original.substring(startIndex + marker.length, gauIndex).trim();
+
+        values[r][commentsCol] =
+          `VFP TY Script: Jan-April (${extracted})`;
+        continue;
+      }
+    }
+
+    // -----------------------------------------------
+    // ✅ Rule 5: Project Food Pak / PFP (CORRECTED)
+    // -----------------------------------------------
+    if (original.includes("Project Food Pak") || original.includes("PFP")) {
+
+      const campaignIndex = original.indexOf("Campaign:");
+      let betweenText = "";
+
+      if (campaignIndex !== -1) {
+        const afterCampaign =
+          original.substring(campaignIndex + 9).trim();
+
+        const pfpIndex =
+          afterCampaign.indexOf("Project Food Pak") !== -1
+            ? afterCampaign.indexOf("Project Food Pak")
+            : afterCampaign.indexOf("PFP");
+
+        if (pfpIndex !== -1) {
+          betweenText = afterCampaign
+            .substring(0, pfpIndex)
+            .trim();
+        }
+      }
+
+      // No text between "Campaign:" and PFP phrase
+      if (betweenText === "") {
+        values[r][commentsCol] = "PFP TY Script: Jan-April";
+        continue;
+      }
+
+      // Contains Distribution Center
+      if (
+        betweenText.includes("Distribution Center") ||
+        betweenText.includes("(Classy)")
+      ) {
+        values[r][commentsCol] = "PFP TY Script: Jan-April";
+        continue;
+      }
+
+      // Clean extracted text
+      betweenText = betweenText
+        .replace(/\b\d{4}-\d{2}\b/g, "")  // remove YYYY-MM
+        .replace(/\bWEST\b/g, "")
+        .replace(/\bSWDAL\b/g, "")
+        .replace(/\bSWSA\b/g, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
+      values[r][commentsCol] =
+        `PFP TY Script: Jan-April (${betweenText})`;
+      continue;
+    }
+  }
+
+  usedRange.setValues(values);
+}
