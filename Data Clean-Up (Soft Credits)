@@ -10,9 +10,10 @@ function main(workbook: ExcelScript.Workbook) {
     //         DO NOT EDIT
     // ==========================
     const sheet = workbook.getActiveWorksheet();
-    const range = sheet.getUsedRange(true);
+    let range = sheet.getUsedRange(true);
+    range.getFormat().autofitColumns();
     if (!range) return;
-    const values = range.getValues();
+    let values = range.getValues();
     const headers = values[0] as string[];
     const rowCount = values.length;
     const colCount = headers.length;
@@ -28,6 +29,23 @@ function main(workbook: ExcelScript.Workbook) {
     if (amountCol === -1) {
         throw new Error(`Header not found: ${AMOUNT_HEADER}`);
     }
+    const dataRange = sheet.getRangeByIndexes(
+        1,
+        0,
+        rowCount - 1,
+        colCount
+    );
+    dataRange.getSort().apply(
+        [
+            {
+                key: nameCol,
+                ascending: true
+            }
+        ],
+        false
+    );
+    range = sheet.getUsedRange(true);
+    values = range.getValues();
     const output: (string | number)[][] = [];
     const rowsToHide = new Set<number>();
     let r = 1;
@@ -37,11 +55,9 @@ function main(workbook: ExcelScript.Workbook) {
             r++;
             continue;
         }
-
         const start = r;
         const names = new Set<string>();
         let total = 0;
-
         while (
             r < rowCount &&
             String(values[r][emailCol] ?? "").trim() === email
@@ -50,12 +66,10 @@ function main(workbook: ExcelScript.Workbook) {
             total += Number(values[r][amountCol]) || 0;
             r++;
         }
-
         const groupSize = r - start;
         const shouldAggregate =
             groupSize > 1 &&
             (email === "Anonymous" || names.size === 1);
-
         if (shouldAggregate) {
             const row: (string | number)[] = Array(colCount).fill("");
             row[emailCol] = email;
@@ -63,12 +77,9 @@ function main(workbook: ExcelScript.Workbook) {
                 row[nameCol] = Array.from(names)[0];
             }
             row[amountCol] = total;
-
             output.push(row);
-
-            // Mark original rows for hiding
             for (let i = start; i < r; i++) {
-                rowsToHide.add(i + 1); // Excel rows are 1-based
+                rowsToHide.add(i + 1);
             }
         }
     }
@@ -77,10 +88,18 @@ function main(workbook: ExcelScript.Workbook) {
             .getRangeByIndexes(rowCount, 0, output.length, colCount)
             .setValues(output);
     }
+
     rowsToHide.forEach(rowNum => {
         sheet.getRange(`A${rowNum}`).getEntireRow().setRowHidden(true);
     });
-
+    for (let c = 0; c < colCount; c++) {
+        if (c !== emailCol && c !== nameCol && c !== amountCol) {
+            sheet
+                .getRangeByIndexes(0, c, rowCount, 1)
+                .getEntireColumn()
+                .setColumnHidden(true);
+        }
+    }
     console.log(
         `Appended ${output.length} totals and hid ${rowsToHide.size} source rows.`
     );
