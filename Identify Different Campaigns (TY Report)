@@ -12,11 +12,11 @@ function main(workbook: ExcelScript.Workbook) {
 
   const commentsCol = headers.indexOf("Comments");
   if (commentsCol === -1) {
-    console.log("❌ 'Comments' column not found.");
+    console.log("'Comments' column not found.");
     return;
   }
 
-  // ✅ Campaigns to EXCLUDE if found anywhere in the name
+  // Campaigns to EXCLUDE if found anywhere in the name
   const EXCLUDED_PHRASES = [
     "Giving Tuesday",
     "Annual Funding",
@@ -53,7 +53,7 @@ function main(workbook: ExcelScript.Workbook) {
 
       if (extracted === "") continue;
 
-      // ❌ Skip excluded campaigns
+      // Skip excluded campaigns
       if (EXCLUDED_PHRASES.some(p => extracted.includes(p))) {
         continue;
       }
@@ -64,8 +64,8 @@ function main(workbook: ExcelScript.Workbook) {
 
   const campaignList = Array.from(campaigns).sort();
 
-  // ✅ READY-TO-PASTE OUTPUT
-  console.log("✅ READY-TO-PASTE GENERAL_PHRASES (EXCLUSIONS APPLIED)");
+  // READY-TO-PASTE OUTPUT
+  console.log("READY-TO-PASTE GENERAL_PHRASES (EXCLUSIONS APPLIED)");
   console.log("================================");
 
   campaignList.forEach(c => {
