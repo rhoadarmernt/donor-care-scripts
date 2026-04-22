@@ -9,19 +9,20 @@ function main(workbook: ExcelScript.Workbook) {
 
   const commentsCol = headers.indexOf("Comments");
   if (commentsCol === -1) {
-    throw new Error("❌ 'Comments' column not found.");
+    throw new Error("'Comments' column not found.");
   }
 
   // ====================================================
-  // ✅ EASY-TO-EDIT PHRASE LISTS
+  // CHANGE THIS TO MATCH THE CURRENT MONTH RANGE
   // ====================================================
-
-  // Change this to match the current month range
-  const SCRIPT_MONTHS = "Jan-April";
+  const SCRIPT_MONTHS = "April-June";
 
   const GENERAL_PHRASES = [
-    // Add phrases from other Script below. Make sure to delete when you're done running the program
-   
+    // ==============================================================================================
+    // ADD PHRASES FROM OTHER SCRIPT BELOW. MAKE SURE TO DELETE WHEN YOU'RE DOING RUNNING THE PROGRAM
+    // ==============================================================================================
+
+
     // Keep these
     "Giving Tuesday",
     "Annual Funding",
@@ -31,36 +32,18 @@ function main(workbook: ExcelScript.Workbook) {
     "Where Most Needed",
     "Summer Acquisition"
   ];
-
-  // ====================================================
-  // 🔁 PROCESS EACH COMMENT CELL
-  // ====================================================
-
   for (let r = 1; r < values.length; r++) {
     let comment = values[r][commentsCol];
     if (typeof comment !== "string") continue;
-
     const original = comment;
-
-    // -----------------------------------------------
-    // Rule 1: General TY Script
-    // -----------------------------------------------
     if (GENERAL_PHRASES.some(p => original.includes(p))) {
       values[r][commentsCol] = `General TY Script: ${SCRIPT_MONTHS}`;
       continue;
     }
-
-    // -----------------------------------------------
-    // Rule 2: Hope Partners
-    // -----------------------------------------------
     if (original.includes("Hope Partners")) {
       values[r][commentsCol] = `Recurring TY Script: ${SCRIPT_MONTHS}`;
       continue;
     }
-
-    // -----------------------------------------------
-    // Rule 3: Project Coin Pak
-    // -----------------------------------------------
     if (original.includes("Project Coin Pak")) {
       const descIndex = original.indexOf("Description:");
       if (descIndex !== -1) {
@@ -74,55 +57,39 @@ function main(workbook: ExcelScript.Workbook) {
         }
       }
     }
-
-    // -----------------------------------------------
-    // Rule 4: Virtual Food Paks
-    // -----------------------------------------------
     if (original.includes("Virtual Food Paks")) {
       const marker = "Paks for ";
       const startIndex = original.indexOf(marker);
       const gauIndex = original.indexOf("GAU:");
-
       if (startIndex !== -1 && gauIndex !== -1 && gauIndex > startIndex) {
         const extracted =
           original.substring(startIndex + marker.length, gauIndex).trim();
-
         values[r][commentsCol] =
           `VFP TY Script: ${SCRIPT_MONTHS} (${extracted})`;
         continue;
       }
     }
-
-    // -----------------------------------------------
-    // Rule 5: Project Food Pak / PFP
-    // -----------------------------------------------
     if (original.includes("Project Food Pak") || original.includes("PFP")) {
-
       const campaignIndex = original.indexOf("Campaign:");
       let betweenText = "";
-
       if (campaignIndex !== -1) {
         const afterCampaign =
           original.substring(campaignIndex + 9).trim();
-
         const pfpIndex =
           afterCampaign.indexOf("Project Food Pak") !== -1
             ? afterCampaign.indexOf("Project Food Pak")
             : afterCampaign.indexOf("PFP");
-
         if (pfpIndex !== -1) {
           betweenText = afterCampaign
             .substring(0, pfpIndex)
             .trim();
         }
       }
-
       // No text between "Campaign:" and PFP phrase
       if (betweenText === "") {
         values[r][commentsCol] = `PFP TY Script: ${SCRIPT_MONTHS}`;
         continue;
       }
-
       // Contains Distribution Center or (Classy)
       if (
         betweenText.includes("Distribution Center") ||
@@ -131,8 +98,6 @@ function main(workbook: ExcelScript.Workbook) {
         values[r][commentsCol] = `PFP TY Script: ${SCRIPT_MONTHS}`;
         continue;
       }
-
-      // Clean extracted text
       betweenText = betweenText
         .replace(/\b\d{4}-\d{2}\b/g, "")  // remove YYYY-MM
         .replace(/\bWEST\b/g, "")
@@ -140,7 +105,6 @@ function main(workbook: ExcelScript.Workbook) {
         .replace(/\bSWSA\b/g, "")
         .replace(/\s{2,}/g, " ")
         .trim();
-
       values[r][commentsCol] =
         `PFP TY Script: ${SCRIPT_MONTHS} (${betweenText})`;
       continue;
