@@ -1,13 +1,5 @@
 # STANDARD OPERATING PROCEDURE 
 
-## DEPARTMENT:  Donor Care 
-
-## CREATED DATE: 4/10/2026 
-
-## PURPOSE: Provides step-by-step instructions for accessing, adding, editing, and executing Excel Automate scripts used in Donor Care workflows, including TY Report generation and Soft Credit processing. 
-
-
-
 Accessing Scripts in Excel 
 ==========================
 
