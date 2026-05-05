@@ -1,0 +1,219 @@
+function main(workbook: ExcelScript.Workbook) {
+
+  const sheet = workbook.getActiveWorksheet();
+  let usedRange = sheet.getUsedRange();
+  if (!usedRange) return;
+
+  let headers = usedRange.getValues()[0] as string[];
+  let columnCount = headers.length;
+
+  const col = (name: string) => headers.indexOf(name);
+
+  // ----------------------------
+  // Church keyword validation
+  // ----------------------------
+  const churchKeywords = [
+    "church",
+    "baptist",
+    "lutheran",
+    "methodist",
+    "mennonite",
+    "episcopal",
+    "presbyterian",
+    "catholic",
+    "chapel",
+    "fellowship",
+    "ministries",
+    "assembly",
+    "evangelical"
+  ];
+
+  const containsChurchKeyword = (name: string): boolean => {
+    const lower = name.toLowerCase();
+    return churchKeywords.some(k => lower.includes(k));
+  };
+
+  // ----------------------------
+  // Column indexes
+  // ----------------------------
+  const amountCol = col("Amount");
+  const accountNameCol = col("Account Name");
+  const countryCol = col("Billing Country");
+  const streetCol = col("Billing Street");
+  const cityCol = col("Billing City");
+  const stateCol = col("Billing State/Province");
+  const zipCol = col("Billing Zip/Postal Code");
+  const rdContactCol = col("RD Primary Contact");
+
+  if (amountCol === -1) return;
+
+  // ----------------------------
+  // Ensure Follow Up sheet exists
+  // ----------------------------
+  let followUp = workbook.getWorksheet("Follow Up");
+  if (!followUp) {
+    followUp = workbook.addWorksheet("Follow Up");
+    followUp.getRangeByIndexes(0, 0, 1, columnCount).setValues([headers]);
+  }
+  let followUpRow = followUp.getUsedRange()?.getRowCount() ?? 1;
+
+  // ----------------------------
+  // Initial sort by Amount
+  // ----------------------------
+  usedRange.getSort().apply(
+    [{ key: amountCol, ascending: true }],
+    false,
+    true
+  );
+
+  // ----------------------------
+  // ROW PROCESSING (LIVE LOOP)
+  // ----------------------------
+  let rowCount = sheet.getUsedRange().getRowCount();
+
+  for (let r = rowCount - 1; r > 0; r--) {
+
+    const rowRange = sheet.getRangeByIndexes(r, 0, 1, columnCount);
+    const row = rowRange.getValues()[0];
+    const amount = Number(row[amountCol]);
+
+    // Delete entries under $100
+    if (amount < 100 || isNaN(amount)) {
+      rowRange.delete(ExcelScript.DeleteShiftDirection.up);
+      continue;
+    }
+
+    let moveToFollowUp = false;
+
+    // Account Name must match church keywords
+    const acctName = String(row[accountNameCol] ?? "");
+    if (!containsChurchKeyword(acctName)) {
+      moveToFollowUp = true;
+    }
+
+    // Missing address fields
+    if (
+      !row[streetCol] ||
+      !row[cityCol] ||
+      !row[stateCol] ||
+      !row[zipCol]
+    ) {
+      moveToFollowUp = true;
+    }
+
+    // Non‑US churches
+    if (
+      row[countryCol] &&
+      String(row[countryCol]).trim().toLowerCase() !== "united states"
+    ) {
+      moveToFollowUp = true;
+    }
+
+    // MOVE → FOLLOW UP → DELETE
+    if (moveToFollowUp) {
+      followUp
+        .getRangeByIndexes(followUpRow, 0, 1, columnCount)
+        .setValues([row]);
+
+      followUpRow++;
+
+      rowRange.delete(ExcelScript.DeleteShiftDirection.up);
+    }
+  }
+
+  // ----------------------------
+  // REFRESH RANGE
+  // ----------------------------
+  usedRange = sheet.getUsedRange();
+  if (!usedRange) return;
+
+  headers = usedRange.getValues()[0] as string[];
+
+  const ensureColumn = (name: string): number => {
+    let idx = headers.indexOf(name);
+    if (idx === -1) {
+      idx = headers.length;
+      sheet.getCell(0, idx).setValue(name);
+      headers.push(name);
+    }
+    return idx;
+  };
+
+  // ----------------------------
+  // ADD REQUIRED COLUMNS
+  // ----------------------------
+  const mealsCol = ensureColumn("Meals");
+  const finalMealsCol = ensureColumn("Final Meal Count");
+  const levelCol = ensureColumn("Fundraising Level");
+  const salutationCol = ensureColumn("Salutation");
+
+  rowCount = sheet.getUsedRange().getRowCount();
+
+  // ----------------------------
+  // FORMULAS & SALUTATION FIX
+  // ----------------------------
+  for (let r = 1; r < rowCount; r++) {
+
+    const amountCell = sheet.getCell(r, amountCol)
+      .getAddress().split("!")[1];
+
+    // Meals
+    sheet.getCell(r, mealsCol)
+      .setFormula(`=${amountCell}*4`);
+
+    // Final Meal Count
+    const mealsCell = sheet.getCell(r, mealsCol)
+      .getAddress().split("!")[1];
+    sheet.getCell(r, finalMealsCol)
+      .setFormula(`=ROUNDDOWN(${mealsCell},0)`);
+
+    // Fundraising Level
+    sheet.getCell(r, levelCol).setFormula(
+      `=IF(${amountCell}>=1000,"Incredible Investor",
+        IF(${amountCell}>=500,"Fantastic Fundraiser",
+        IF(${amountCell}>=100,"Amazing Ambassador","")))`
+    );
+
+    // RD Primary Contact & Salutation
+    const contact = sheet.getCell(r, rdContactCol).getValue();
+
+    if (!contact || String(contact).trim() === "") {
+      sheet.getCell(r, rdContactCol).setValue("VBS Contact");
+      sheet.getCell(r, salutationCol).setValue("VBS Contact");
+
+    } else if (String(contact).trim().toLowerCase() === "vbs contact") {
+      sheet.getCell(r, salutationCol).setValue("VBS Contact");
+
+    } else {
+      const contactCell = sheet.getCell(r, rdContactCol)
+        .getAddress().split("!")[1];
+
+      sheet.getCell(r, salutationCol)
+        .setFormula(`=LEFT(${contactCell},SEARCH(" ",${contactCell})-1)`);
+    }
+  }
+
+  // ----------------------------
+  // FINAL SORT BY AMOUNT
+  // ----------------------------
+  sheet.getUsedRange().getSort().apply(
+    [{ key: amountCol, ascending: true }],
+    false,
+    true
+  );
+
+  // ----------------------------
+  // AUTOFIT BOTH SHEETS
+  // ----------------------------
+  let mainRange = sheet.getUsedRange();
+  if (mainRange) {
+    mainRange.getFormat().autofitColumns();
+    mainRange.getFormat().autofitRows();
+  }
+
+  let followUpRange = followUp.getUsedRange();
+  if (followUpRange) {
+    followUpRange.getFormat().autofitColumns();
+    followUpRange.getFormat().autofitRows();
+  }
+}
