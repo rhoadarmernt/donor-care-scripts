@@ -43,28 +43,28 @@ Using Scripts for TY Report Tasks
 TY Task 1: 
 --------------
 
-Within Excel, select the ‘Edit’ icon next to the “Identify Different Campaigns (TY Report)” script.  
+Within Excel, select the ‘Edit’ icon next to the “Identify General Campaigns List” script.  
 
 Select the ‘Run’ button. It will output a list of phrases. Copy the list. 
 
-Go back to all scripts and select the ‘Edit’ icon next to the “Find and Replace (TY Report)” script. 
+Go back to all scripts and select the ‘Edit’ icon next to the “Assign TY Scripts to Comments” script. 
 
 If the current month range is not accurately displayed in Line 20, change the value within the quotations to the correct month range. 
 
-Click at the end of the comment on line 23 and hit enter on your keyboard. This will take you to a new line. Paste the list that you copied from “Identify Different Campaigns” here. 
+Click at the end of the comment on line 23 and hit enter on your keyboard. This will take you to a new line. Paste the list that you copied from “Identify General Campaigns List” here. 
 
 If any of the campaigns listed from your copy/paste are NOT general campaigns, delete that single line of code. For those, you will need to go through the sheet and manually assign a value. 
 
-Click ‘Run’ to execute the script. Once it is complete, it is recommended that you delete the list that you had just copied from the code in “Find and Replace (TY Report)”. 
+Click ‘Run’ to execute the script. Once it is complete, it is recommended that you delete the list that you had just copied from the code in “Assign TY Scripts to Comments”. 
 
-Lastly, go back to all scripts, and select the ‘Run’ icon next to the “TY Task 1 (TY Report)” script. Your spreadsheet should now be ready, however, quickly double-check to make sure everything looks right. 
+Lastly, go back to all scripts, and select the ‘Run’ icon next to the “Update Status & Date” script. Your spreadsheet should now be ready, however, quickly double-check to make sure everything looks right. 
 
  
 
 TY Task 2: 
 --------------------
 
-Within Excel, select the ‘Run’ icon next to the “TY Task 2 (TY Report)” script. 
+Within Excel, select the ‘Run’ icon next to the “Clean & Prepare Mailing Report” script. 
 
 Any highlights on the spreadsheet need your attention, as they are likely accounts with international addresses. 
 
@@ -75,7 +75,7 @@ If there are no highlights, your spreadsheet should be ready!
 Using Script for Soft Credits 
 =================================
 
-Within Excel, select the ‘Edit’ icon next to the “Data Clean-Up (Soft Credits)” script. 
+Within Excel, select the ‘Edit’ icon next to the “Soft Credit Data Cleanup” script. 
 
 In the code, underneath “Edit these headers as needed”, you must change the values between the quotations for EMAIL_HEADER, NAME_HEADER, & AMOUNT_HEADER to match the column names in the current spreadsheet (EMAIL_HEADER is the Email column, NAME_HEADER is either Full Name or First Name column, AMOUNT_HEADER is the column with the monetary totals that you must input). 
 
