@@ -6,35 +6,53 @@ function main(workbook: ExcelScript.Workbook) {
     const NAME_HEADER = "Full Name";
     const AMOUNT_HEADER = "Net Amount";
 
+
+
     // ==========================
     // DO NOT EDIT BELOW
     // ==========================
     const sheet = workbook.getActiveWorksheet();
     const usedRange = sheet.getUsedRange(true);
 
+
+
     if (!usedRange) return;
 
+
+
     let values = usedRange.getValues();
+
+
 
     const headers = values[0] as string[];
     const rowCount = values.length;
     const colCount = headers.length;
 
+
+
     const emailCol = headers.indexOf(EMAIL_HEADER);
     const nameCol = headers.indexOf(NAME_HEADER);
     const amountCol = headers.indexOf(AMOUNT_HEADER);
+
+
 
     if (emailCol === -1) {
         throw new Error(`Header not found: ${EMAIL_HEADER}`);
     }
 
+
+
     if (nameCol === -1) {
         throw new Error(`Header not found: ${NAME_HEADER}`);
     }
 
+
+
     if (amountCol === -1) {
         throw new Error(`Header not found: ${AMOUNT_HEADER}`);
     }
+
+
 
     // Sort by email
     if (rowCount > 1) {
@@ -54,31 +72,49 @@ function main(workbook: ExcelScript.Workbook) {
         );
     }
 
+
+
     // IMPORTANT:
     // Refresh values AFTER sorting
     values = sheet.getUsedRange(true).getValues();
 
+
+
     const output: (string | number)[][] = [];
     const rowsToHide = new Set<number>();
 
+
+
     let r = 1;
+
+
 
     while (r < values.length) {
         const rawEmail = String(values[r][emailCol] ?? "").trim();
+
+
 
         if (!rawEmail) {
             r++;
             continue;
         }
 
+
+
         const normalizedEmail = rawEmail.toLowerCase();
         const isAnonymous =
             normalizedEmail === "anonymous";
 
+
+
         const start = r;
+
+
 
         const names = new Set<string>();
         let totalAmount = 0;
+
+
 
         while (
             r < values.length &&
@@ -90,17 +126,27 @@ function main(workbook: ExcelScript.Workbook) {
                 values[r][nameCol] ?? ""
             ).trim();
 
+
+
             if (name) {
                 names.add(name);
             }
 
+
+
             totalAmount +=
                 Number(values[r][amountCol]) || 0;
+
+
 
             r++;
         }
 
+
+
         const groupSize = r - start;
+
+
 
         const shouldAggregate =
             groupSize > 1 &&
@@ -109,25 +155,37 @@ function main(workbook: ExcelScript.Workbook) {
                 names.size <= 1
             );
 
+
+
         if (shouldAggregate) {
             const newRow: (string | number)[] =
                 Array(colCount).fill("");
 
+
+
             newRow[emailCol] = rawEmail;
             newRow[amountCol] = totalAmount;
+
+
 
             if (!isAnonymous && names.size === 1) {
                 newRow[nameCol] =
                     Array.from(names)[0];
             }
 
+
+
             output.push(newRow);
+
+
 
             for (let i = start; i < r; i++) {
                 rowsToHide.add(i + 1);
             }
         }
     }
+
+
 
     // Append summarized rows
     if (output.length > 0) {
@@ -139,12 +197,16 @@ function main(workbook: ExcelScript.Workbook) {
         ).setValues(output);
     }
 
+
+
     // Hide source rows
     rowsToHide.forEach(rowNum => {
         sheet.getRange(`A${rowNum}`)
             .getEntireRow()
             .setRowHidden(true);
     });
+
+
 
     // Hide unnecessary columns
     for (let c = 0; c < colCount; c++) {
@@ -163,6 +225,49 @@ function main(workbook: ExcelScript.Workbook) {
                 .setColumnHidden(true);
         }
     }
+
+
+
+    function toProperCase(text: string): string {
+    return text
+        .toLowerCase()
+        .split(" ")
+        .map(word =>
+            word.length > 0
+                ? word.charAt(0).toUpperCase() + word.slice(1)
+                : ""
+        )
+        .join(" ");
+    }
+    // Standardize name and email formatting
+for (let row = 1; row < values.length + output.length; row++) {
+
+
+
+    // Format names as Proper Case
+    const nameCell = sheet.getCell(row, nameCol);
+    const currentName = String(nameCell.getValue() ?? "").trim();
+
+
+
+    if (currentName) {
+        nameCell.setValue(toProperCase(currentName));
+    }
+
+
+
+    // Format emails as lowercase
+    const emailCell = sheet.getCell(row, emailCol);
+    const currentEmail = String(emailCell.getValue() ?? "").trim();
+
+
+
+    if (currentEmail) {
+        emailCell.setValue(currentEmail.toLowerCase());
+    }
+}
+
+
 
     console.log(
         `Appended ${output.length} totals and hid ${rowsToHide.size} source rows.`
