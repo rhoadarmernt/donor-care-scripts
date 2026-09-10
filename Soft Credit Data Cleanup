@@ -7,99 +7,163 @@ function main(workbook: ExcelScript.Workbook) {
     const AMOUNT_HEADER = "Net Amount";
 
     // ==========================
-    //         DO NOT EDIT
+    // DO NOT EDIT BELOW
     // ==========================
     const sheet = workbook.getActiveWorksheet();
-    let range = sheet.getUsedRange(true);
-    range.getFormat().autofitColumns();
-    if (!range) return;
-    let values = range.getValues();
+    const usedRange = sheet.getUsedRange(true);
+
+    if (!usedRange) return;
+
+    let values = usedRange.getValues();
+
     const headers = values[0] as string[];
     const rowCount = values.length;
     const colCount = headers.length;
+
     const emailCol = headers.indexOf(EMAIL_HEADER);
     const nameCol = headers.indexOf(NAME_HEADER);
     const amountCol = headers.indexOf(AMOUNT_HEADER);
+
     if (emailCol === -1) {
         throw new Error(`Header not found: ${EMAIL_HEADER}`);
     }
+
     if (nameCol === -1) {
         throw new Error(`Header not found: ${NAME_HEADER}`);
     }
+
     if (amountCol === -1) {
         throw new Error(`Header not found: ${AMOUNT_HEADER}`);
     }
-    const dataRange = sheet.getRangeByIndexes(
-        1,
-        0,
-        rowCount - 1,
-        colCount
-    );
-    dataRange.getSort().apply(
-        [
-            {
-                key: nameCol,
-                ascending: true
-            }
-        ],
-        false
-    );
-    range = sheet.getUsedRange(true);
-    values = range.getValues();
+
+    // Sort by email
+    if (rowCount > 1) {
+        sheet.getRangeByIndexes(
+            1,
+            0,
+            rowCount - 1,
+            colCount
+        ).getSort().apply(
+            [
+                {
+                    key: emailCol,
+                    ascending: true
+                }
+            ],
+            false
+        );
+    }
+
+    // IMPORTANT:
+    // Refresh values AFTER sorting
+    values = sheet.getUsedRange(true).getValues();
+
     const output: (string | number)[][] = [];
     const rowsToHide = new Set<number>();
+
     let r = 1;
-    while (r < rowCount) {
-        const email = String(values[r][emailCol] ?? "").trim();
-        if (!email) {
+
+    while (r < values.length) {
+        const rawEmail = String(values[r][emailCol] ?? "").trim();
+
+        if (!rawEmail) {
             r++;
             continue;
         }
+
+        const normalizedEmail = rawEmail.toLowerCase();
+        const isAnonymous =
+            normalizedEmail === "anonymous";
+
         const start = r;
+
         const names = new Set<string>();
-        let total = 0;
+        let totalAmount = 0;
+
         while (
-            r < rowCount &&
-            String(values[r][emailCol] ?? "").trim() === email
+            r < values.length &&
+            String(values[r][emailCol] ?? "")
+                .trim()
+                .toLowerCase() === normalizedEmail
         ) {
-            names.add(String(values[r][nameCol] ?? "").trim());
-            total += Number(values[r][amountCol]) || 0;
+            const name = String(
+                values[r][nameCol] ?? ""
+            ).trim();
+
+            if (name) {
+                names.add(name);
+            }
+
+            totalAmount +=
+                Number(values[r][amountCol]) || 0;
+
             r++;
         }
+
         const groupSize = r - start;
+
         const shouldAggregate =
             groupSize > 1 &&
-            (email === "Anonymous" || names.size === 1);
+            (
+                isAnonymous ||
+                names.size <= 1
+            );
+
         if (shouldAggregate) {
-            const row: (string | number)[] = Array(colCount).fill("");
-            row[emailCol] = email;
-            if (email !== "Anonymous") {
-                row[nameCol] = Array.from(names)[0];
+            const newRow: (string | number)[] =
+                Array(colCount).fill("");
+
+            newRow[emailCol] = rawEmail;
+            newRow[amountCol] = totalAmount;
+
+            if (!isAnonymous && names.size === 1) {
+                newRow[nameCol] =
+                    Array.from(names)[0];
             }
-            row[amountCol] = total;
-            output.push(row);
+
+            output.push(newRow);
+
             for (let i = start; i < r; i++) {
                 rowsToHide.add(i + 1);
             }
         }
     }
+
+    // Append summarized rows
     if (output.length > 0) {
-        sheet
-            .getRangeByIndexes(rowCount, 0, output.length, colCount)
-            .setValues(output);
+        sheet.getRangeByIndexes(
+            values.length,
+            0,
+            output.length,
+            colCount
+        ).setValues(output);
     }
 
+    // Hide source rows
     rowsToHide.forEach(rowNum => {
-        sheet.getRange(`A${rowNum}`).getEntireRow().setRowHidden(true);
+        sheet.getRange(`A${rowNum}`)
+            .getEntireRow()
+            .setRowHidden(true);
     });
+
+    // Hide unnecessary columns
     for (let c = 0; c < colCount; c++) {
-        if (c !== emailCol && c !== nameCol && c !== amountCol) {
-            sheet
-                .getRangeByIndexes(0, c, rowCount, 1)
+        if (
+            c !== emailCol &&
+            c !== nameCol &&
+            c !== amountCol
+        ) {
+            sheet.getRangeByIndexes(
+                0,
+                c,
+                values.length + output.length,
+                1
+            )
                 .getEntireColumn()
                 .setColumnHidden(true);
         }
     }
+
     console.log(
         `Appended ${output.length} totals and hid ${rowsToHide.size} source rows.`
     );
