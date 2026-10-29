@@ -1,0 +1,460 @@
+/**
+ * PHASE 2 - ROW DELETION & BASIC CLEANUP
+ */
+
+type Cell = string | number | boolean;
+
+const DRY_RUN = false;
+const MAX_DELETE_FRACTION = 0.20;
+
+const BACKUP_SHEET = "Raw Backup";
+const LOG_SHEET = "Changes Log";
+const SUMMARY_SHEET = "Summary";
+
+const LOG_HEADERS = [
+  "Original Row",
+  "Account Case Safe ID",
+  "Column",
+  "Original Value",
+  "New Value",
+  "Rule Triggered",
+  "Action",
+  "Timestamp"
+];
+
+const SPACE_CLEAN_COLUMNS = [
+  "Account Name",
+  "Formal Greeting",
+  "Informal Greeting",
+  "Billing Street",
+  "Billing City",
+  "Billing State/Province",
+  "Billing Country"
+];
+
+const CASE_FIX_COLUMNS = [
+  "Billing Street",
+  "Billing City"
+];
+
+const STATE_COLUMN = "Billing State/Province";
+
+// --------------------------------------------------
+// HELPERS
+// --------------------------------------------------
+
+function appendLog(log: ExcelScript.Worksheet, entries: Cell[][]): void {
+  if (entries.length === 0) return;
+
+  const nextRow = log.getUsedRange().getRowCount();
+
+  log
+    .getRangeByIndexes(nextRow, 0, entries.length, LOG_HEADERS.length)
+    .setValues(entries);
+}
+
+function appendSummary(
+  summary: ExcelScript.Worksheet,
+  rows: Cell[][]
+): void {
+
+  if (rows.length === 0) return;
+
+  const nextRow = summary.getUsedRange().getRowCount();
+
+  summary
+    .getRangeByIndexes(nextRow, 0, rows.length, 2)
+    .setValues(rows);
+}
+
+function logRow(
+  originalRow: Cell,
+  accountId: Cell,
+  column: string,
+  oldValue: Cell,
+  newValue: Cell,
+  rule: string,
+  action: string
+): Cell[] {
+
+  return [
+    originalRow,
+    accountId,
+    column,
+    oldValue,
+    newValue,
+    rule,
+    action,
+    new Date().toISOString()
+  ];
+}
+
+function colIndex(headers: string[], name: string): number {
+
+  const idx = headers.indexOf(name);
+
+  if (idx === -1) {
+    throw new Error(`Column not found: "${name}"`);
+  }
+
+  return idx;
+}
+
+// --------------------------------------------------
+// TEXT FUNCTIONS
+// --------------------------------------------------
+
+function cleanSpaces(value: string): string {
+
+  return value
+    .replace(/[\u200B\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const DIRECTIONALS = [
+  "N", "S", "E", "W",
+  "NE", "NW", "SE", "SW"
+];
+
+function capWord(word: string): string {
+
+  const lower = word.toLowerCase();
+
+  if (/^mc[a-z]/.test(lower)) {
+    return "Mc" +
+      lower.charAt(2).toUpperCase() +
+      lower.substring(3);
+  }
+
+  if (/^[a-z]'[a-z]/.test(lower)) {
+    return (
+      lower.charAt(0).toUpperCase() +
+      "'" +
+      lower.charAt(2).toUpperCase() +
+      lower.substring(3)
+    );
+  }
+
+  return lower.replace(
+    /^[a-z]/,
+    c => c.toUpperCase()
+  );
+}
+
+function properCaseToken(token: string): string {
+
+  if (!token) return token;
+
+  const bare = token.replace(/\./g, "");
+  const upper = bare.toUpperCase();
+
+  if (DIRECTIONALS.indexOf(upper) !== -1) {
+    return upper;
+  }
+
+  if (upper === "PO") {
+    return "PO";
+  }
+
+  if (/^\d+(ST|ND|RD|TH)$/i.test(token)) {
+    return token.toLowerCase();
+  }
+
+  if (/\d/.test(token)) {
+    return token.toUpperCase();
+  }
+
+  return token
+    .split("-")
+    .map(part => capWord(part))
+    .join("-");
+}
+
+function properCase(value: string): string {
+
+  return value
+    .split(" ")
+    .map(token => properCaseToken(token))
+    .join(" ");
+}
+
+function needsCaseFix(value: string): boolean {
+
+  if (!/[A-Za-z]/.test(value)) {
+    return false;
+  }
+
+  return (
+    value === value.toUpperCase() ||
+    value === value.toLowerCase()
+  );
+}
+
+// --------------------------------------------------
+// MAIN
+// --------------------------------------------------
+
+function main(workbook: ExcelScript.Workbook) {
+
+  const dataSheet = workbook.getActiveWorksheet();
+
+  const sheetName = dataSheet.getName();
+
+  if (
+    [
+      BACKUP_SHEET,
+      LOG_SHEET,
+      SUMMARY_SHEET,
+      "ZipLookup"
+    ].includes(sheetName)
+  ) {
+    throw new Error(
+      "Activate the donor data sheet first."
+    );
+  }
+
+  if (!workbook.getWorksheet(BACKUP_SHEET)) {
+    throw new Error(
+      "Run Phase 1 first."
+    );
+  }
+
+  const log = workbook.getWorksheet(LOG_SHEET);
+  const summary = workbook.getWorksheet(SUMMARY_SHEET);
+
+  if (!log || !summary) {
+    throw new Error(
+      "Changes Log or Summary sheet missing."
+    );
+  }
+
+  const used = dataSheet.getUsedRange();
+
+  if (!used) {
+    throw new Error("No data found.");
+  }
+
+  const values = used.getValues();
+
+  const headers = values[0]
+    .map(v => String(v).trim());
+
+  const cOrig = colIndex(headers, "Original Row");
+  const cId = colIndex(headers, "Account Case Safe ID");
+  const cAcct = colIndex(headers, "Account Name");
+  const cStreet = colIndex(headers, "Billing Street");
+  const cState = colIndex(headers, STATE_COLUMN);
+
+  const entries: Cell[][] = [];
+  const kept: Cell[][] = [];
+
+  let deletedCount = 0;
+  let spaceFixes = 0;
+  let caseFixes = 0;
+  let stateFixes = 0;
+
+  const spaceCols = SPACE_CLEAN_COLUMNS.map(
+    h => colIndex(headers, h)
+  );
+
+  const caseCols = CASE_FIX_COLUMNS.map(
+    h => colIndex(headers, h)
+  );
+
+  for (let i = 1; i < values.length; i++) {
+
+    const row = [...values[i]];
+
+    const street = cleanSpaces(
+      String(row[cStreet] ?? "")
+    );
+
+    if (street === "") {
+
+      deletedCount++;
+
+      entries.push(
+        logRow(
+          row[cOrig],
+          row[cId],
+          "ENTIRE ROW",
+          JSON.stringify(row),
+          "(row deleted)",
+          "Blank Billing Street",
+          "Deleted"
+        )
+      );
+
+      continue;
+    }
+
+    const originalRow = row[cOrig];
+    const accountId = row[cId];
+
+    // whitespace cleanup
+
+    for (const col of spaceCols) {
+
+      const value = row[col];
+
+      if (typeof value !== "string") continue;
+
+      const cleaned = cleanSpaces(value);
+
+      if (cleaned !== value) {
+
+        row[col] = cleaned;
+
+        spaceFixes++;
+
+        entries.push(
+          logRow(
+            originalRow,
+            accountId,
+            headers[col],
+            value,
+            cleaned,
+            "Whitespace cleanup",
+            "Auto-fixed"
+          )
+        );
+      }
+    }
+
+    // casing
+
+    for (const col of caseCols) {
+
+      const value = row[col];
+
+      if (
+        typeof value !== "string" ||
+        !needsCaseFix(value)
+      ) {
+        continue;
+      }
+
+      const fixed = properCase(value);
+
+      if (fixed !== value) {
+
+        row[col] = fixed;
+
+        caseFixes++;
+
+        entries.push(
+          logRow(
+            originalRow,
+            accountId,
+            headers[col],
+            value,
+            fixed,
+            "Fix ALL CAPS / lowercase",
+            "Auto-fixed"
+          )
+        );
+      }
+    }
+
+    // state codes
+
+    const state = row[cState];
+
+    if (
+      typeof state === "string" &&
+      /^[A-Za-z]{2}$/.test(state) &&
+      state !== state.toUpperCase()
+    ) {
+
+      row[cState] = state.toUpperCase();
+
+      stateFixes++;
+
+      entries.push(
+        logRow(
+          originalRow,
+          accountId,
+          headers[cState],
+          state,
+          state.toUpperCase(),
+          "Uppercase state code",
+          "Auto-fixed"
+        )
+      );
+    }
+
+    kept.push(row);
+  }
+
+  const totalRows = values.length - 1;
+
+  const deleteFraction =
+    totalRows === 0
+      ? 0
+      : deletedCount / totalRows;
+
+  if (deleteFraction > MAX_DELETE_FRACTION) {
+
+    throw new Error(
+      `${deletedCount} rows would be deleted (${(
+        deleteFraction * 100
+      ).toFixed(1)}%), exceeding the safety limit.`
+    );
+  }
+
+  if (DRY_RUN) {
+
+    console.log(
+      `PREVIEW ONLY
+
+Rows deleted: ${deletedCount}
+Whitespace fixes: ${spaceFixes}
+Capitalization fixes: ${caseFixes}
+State fixes: ${stateFixes}
+Rows remaining: ${kept.length}`
+    );
+
+    return;
+  }
+
+  // -------------------------------------
+  // REBUILD SHEET
+  // -------------------------------------
+
+  const rebuilt: (string | number | boolean)[][] = [
+    headers,
+    ...kept
+  ];
+
+  dataSheet.getUsedRange()?.clear();
+
+  dataSheet
+    .getRangeByIndexes(
+      0,
+      0,
+      rebuilt.length,
+      rebuilt[0].length
+    )
+    .setValues(rebuilt);
+
+  appendLog(log, entries);
+
+  appendSummary(summary, [
+    ["Phase 2: rows deleted", deletedCount],
+    ["Phase 2: whitespace fixes", spaceFixes],
+    ["Phase 2: capitalization fixes", caseFixes],
+    ["Phase 2: state code fixes", stateFixes],
+    ["Data rows after Phase 2", kept.length]
+  ]);
+
+  console.log(
+    `PHASE 2 COMPLETE
+
+Rows deleted: ${deletedCount}
+Whitespace fixes: ${spaceFixes}
+Capitalization fixes: ${caseFixes}
+State fixes: ${stateFixes}
+Remaining rows: ${kept.length}`
+  );
+}
