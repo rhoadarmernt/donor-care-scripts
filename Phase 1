@@ -1,0 +1,193 @@
+/**
+ * PHASE 1 - SETUP & FOUNDATION
+ * Mid/Major List Cleanup (Office Scripts)
+ *
+ * Run this ONCE, with your data sheet as the active sheet.
+ * What it does:
+ *   1. Checks that all expected column headers exist
+ *   2. Saves an untouched copy of the data to a sheet called "Raw Backup"
+ *   3. Adds helper columns to the data sheet: Original Row, Flag, Flag Reason, Suggested Fix
+ *   4. Creates the "Changes Log", "Summary", and "ZipLookup" sheets
+ *
+ * It does NOT change, delete, or reformat any of your actual data.
+ */
+
+type Cell = string | number | boolean;
+
+// ---------- SETTINGS ----------
+const REQUIRED_HEADERS: string[] = [
+    "Last Activity",
+    "Account Name",
+    "Formal Greeting",
+    "Informal Greeting",
+    "Billing Street",
+    "Billing City",
+    "Billing Zip/Postal Code",
+    "Billing State/Province",
+    "Billing Country",
+    "Type",
+    "Last Modified Date",
+    "Account Case Safe ID",
+    "Primary Household ID",
+    "Average Gift"
+];
+const HELPER_HEADERS: string[] = ["Original Row", "Flag", "Flag Reason", "Suggested Fix"];
+const LOG_HEADERS: string[] = [
+    "Original Row",
+    "Account Case Safe ID",
+    "Column",
+    "Original Value",
+    "New Value",
+    "Rule Triggered",
+    "Action",
+    "Timestamp"
+];
+const BACKUP_SHEET = "Raw Backup";
+const LOG_SHEET = "Changes Log";
+const SUMMARY_SHEET = "Summary";
+const ZIP_SHEET = "ZipLookup";
+
+// ---------- SHARED HELPERS (copy these into every later phase script) ----------
+
+/** Adds rows to the bottom of the Changes Log in one bulk write. */
+function appendLog(log: ExcelScript.Worksheet, entries: Cell[][]): void {
+    if (entries.length === 0) return;
+    const nextRow = log.getUsedRange().getRowCount(); // header row counts as 1
+    log.getRangeByIndexes(nextRow, 0, entries.length, LOG_HEADERS.length).setValues(entries);
+}
+
+/** Builds one Changes Log row. */
+function logRow(
+    originalRow: number | string,
+    accountId: Cell,
+    column: string,
+    oldValue: Cell,
+    newValue: Cell,
+    rule: string,
+    action: string
+): Cell[] {
+    return [originalRow, accountId, column, oldValue, newValue, rule, action, new Date().toISOString()];
+}
+
+/** Finds a column index by header name; throws a clear error if missing. */
+function colIndex(headers: string[], name: string): number {
+    const i = headers.indexOf(name);
+    if (i === -1) throw new Error(`Column not found: "${name}"`);
+    return i;
+}
+
+/** Styles a header row. */
+function styleHeader(range: ExcelScript.Range): void {
+    range.getFormat().getFont().setBold(true);
+    range.getFormat().getFill().setColor("#D9E1F2");
+}
+
+// ---------- MAIN ----------
+function main(workbook: ExcelScript.Workbook) {
+    const dataSheet = workbook.getActiveWorksheet();
+    const used = dataSheet.getUsedRange();
+    if (!used) throw new Error("The active sheet is empty. Activate your data sheet and run again.");
+
+    // Headers must start at A1
+    if (used.getRowIndex() !== 0 || used.getColumnIndex() !== 0) {
+        throw new Error("Your headers need to start in cell A1 (no blank rows/columns above or to the left).");
+    }
+
+    // Protect the backup: refuse to run twice
+    if (workbook.getWorksheet(BACKUP_SHEET)) {
+        throw new Error(
+            `A sheet named "${BACKUP_SHEET}" already exists, so setup has probably been run. ` +
+            `Rename or delete that sheet only if you really want to start over.`
+        );
+    }
+
+    const values = used.getValues();
+    const rowCount = used.getRowCount();
+    const colCount = used.getColumnCount();
+    const headers: string[] = values[0].map((h) => String(h).trim());
+
+    // 1. Validate headers
+    const missing = REQUIRED_HEADERS.filter((h) => headers.indexOf(h) === -1);
+    if (missing.length > 0) {
+        throw new Error(
+            `Missing or misspelled column header(s): ${missing.join(", ")}. ` +
+            `Headers found: ${headers.join(" | ")}`
+        );
+    }
+
+    // 2. Make the untouched backup BEFORE adding anything
+    const backup = dataSheet.copy(ExcelScript.WorksheetPositionType.end);
+    backup.setName(BACKUP_SHEET);
+    backup.setTabColor("#808080");
+    dataSheet.activate();
+
+    // 3. Add helper columns to the data sheet (skips any that already exist)
+    const toAdd = HELPER_HEADERS.filter((h) => headers.indexOf(h) === -1);
+    if (toAdd.length > 0) {
+        const block: Cell[][] = [];
+        block.push(toAdd.slice());
+        for (let r = 1; r < rowCount; r++) {
+            const row: Cell[] = [];
+            for (const h of toAdd) {
+                // Original Row = the row number you see in Excel right now
+                row.push(h === "Original Row" ? r + 1 : "");
+            }
+            block.push(row);
+        }
+        const helperRange = dataSheet.getRangeByIndexes(0, colCount, rowCount, toAdd.length);
+        helperRange.setValues(block);
+        styleHeader(dataSheet.getRangeByIndexes(0, colCount, 1, toAdd.length));
+    }
+    dataSheet.getFreezePanes().freezeRows(1);
+
+    // 4. Changes Log
+    let log = workbook.getWorksheet(LOG_SHEET);
+    if (!log) {
+        log = workbook.addWorksheet(LOG_SHEET);
+        const logHeader = log.getRangeByIndexes(0, 0, 1, LOG_HEADERS.length);
+        logHeader.setValues([LOG_HEADERS]);
+        styleHeader(logHeader);
+        log.getFreezePanes().freezeRows(1);
+    }
+    appendLog(log, [logRow("-", "-", "-", "-", "-", "Phase 1 setup complete", "Setup")]);
+
+    // 5. Summary
+    let summary = workbook.getWorksheet(SUMMARY_SHEET);
+    if (!summary) {
+        summary = workbook.addWorksheet(SUMMARY_SHEET);
+        const sumHeader = summary.getRangeByIndexes(0, 0, 1, 2);
+        sumHeader.setValues([["Metric", "Count"]]);
+        styleHeader(sumHeader);
+        summary.getRangeByIndexes(1, 0, 2, 2).setValues([
+            ["Data rows at start (excluding header)", rowCount - 1],
+            ["Setup run (UTC)", new Date().toISOString()]
+        ]);
+        summary.getRange("A:A").getFormat().setColumnWidth(260);
+        summary.getRange("B:B").getFormat().setColumnWidth(180);
+    }
+
+    // 6. ZipLookup (you paste a free US ZIP database here)
+    let zip = workbook.getWorksheet(ZIP_SHEET);
+    if (!zip) {
+        zip = workbook.addWorksheet(ZIP_SHEET);
+        zip.getRange("A:A").setNumberFormat("@"); // text format keeps leading zeros
+        const zipHeader = zip.getRangeByIndexes(0, 0, 1, 3);
+        zipHeader.setValues([["Zip5", "City", "State"]]);
+        styleHeader(zipHeader);
+        zip.setTabColor("#FFC000");
+    }
+
+    // 7. Tidy up
+    // Cosmetic only: fit widths to the header row (autofitting 7,000 rows can time out)
+    try {
+        dataSheet.getRangeByIndexes(0, 0, 1, colCount + toAdd.length).getFormat().autofitColumns();
+        log.getRangeByIndexes(0, 0, 1, LOG_HEADERS.length).getFormat().autofitColumns();
+    } catch (e) {
+        console.log("Skipped column autofit (cosmetic only).");
+    }
+
+    console.log(
+        `Setup complete. ${rowCount - 1} data rows found. ` +
+        `Backup saved to "${BACKUP_SHEET}". Helper columns added: ${toAdd.join(", ") || "none (already present)"}.`
+    );
+}
