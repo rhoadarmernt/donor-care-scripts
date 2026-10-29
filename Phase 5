@@ -1,0 +1,194 @@
+/**
+ * PHASE 5 - INTERNATIONAL ADDRESS DETECTION
+ *
+ * Flags records where Billing State/Province is not
+ * a standard US state abbreviation.
+ *
+ * No address data is modified.
+ */
+
+type Cell = string | number | boolean;
+
+const LOG_SHEET = "Changes Log";
+const SUMMARY_SHEET = "Summary";
+const BACKUP_SHEET = "Raw Backup";
+
+const VALID_STATES = new Set<string>([
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+  "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+  "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+  "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+  "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+  "DC"
+]);
+
+//--------------------------------------------------
+// HELPERS
+//--------------------------------------------------
+
+function getColumnIndex(headers: string[], columnName: string): number {
+  const index = headers.indexOf(columnName);
+
+  if (index === -1) {
+    throw new Error(`Column not found: ${columnName}`);
+  }
+
+  return index;
+}
+
+function appendText(existing: Cell, addition: string): string {
+  const current = String(existing ?? "").trim();
+
+  if (!current) {
+    return addition;
+  }
+
+  const entries = current
+    .split(";")
+    .map(entry => entry.trim());
+
+  if (entries.includes(addition)) {
+    return current;
+  }
+
+  return `${current}; ${addition}`;
+}
+
+function appendRows(
+  sheet: ExcelScript.Worksheet,
+  rows: Cell[][]
+): void {
+  if (rows.length === 0) {
+    return;
+  }
+
+  const nextRow = sheet.getUsedRange()?.getRowCount() ?? 0;
+  const columnCount = rows[0].length;
+
+  sheet
+    .getRangeByIndexes(nextRow, 0, rows.length, columnCount)
+    .setValues(rows);
+}
+
+//--------------------------------------------------
+// MAIN
+//--------------------------------------------------
+
+function main(workbook: ExcelScript.Workbook): void {
+  const sheet = workbook.getActiveWorksheet();
+
+  const excludedSheets = [
+    LOG_SHEET,
+    SUMMARY_SHEET,
+    BACKUP_SHEET,
+    "ZipLookup"
+  ];
+
+  if (excludedSheets.includes(sheet.getName())) {
+    throw new Error("Activate your donor data worksheet first.");
+  }
+
+  const logSheet = workbook.getWorksheet(LOG_SHEET);
+  const summarySheet = workbook.getWorksheet(SUMMARY_SHEET);
+
+  if (!logSheet || !summarySheet) {
+    throw new Error("Run Phase 1 first.");
+  }
+
+  const usedRange = sheet.getUsedRange();
+
+  if (!usedRange) {
+    throw new Error("No data found.");
+  }
+
+  const values = usedRange.getValues();
+
+  if (values.length < 2) {
+    throw new Error("No donor records found.");
+  }
+
+  const headers = values[0].map(value => String(value).trim());
+
+  const cState = getColumnIndex(headers, "Billing State/Province");
+  const cOriginalRow = getColumnIndex(headers, "Original Row");
+  const cAccountId = getColumnIndex(headers, "Account Case Safe ID");
+  const cFlag = getColumnIndex(headers, "Flag");
+  const cReason = getColumnIndex(headers, "Flag Reason");
+  const cSuggestedFix = getColumnIndex(headers, "Suggested Fix");
+
+  const rowCount = values.length - 1;
+  const timestamp = new Date().toISOString();
+
+  const flagValues: Cell[][] = [];
+  const reasonValues: Cell[][] = [];
+  const suggestedFixValues: Cell[][] = [];
+  const logRows: Cell[][] = [];
+
+  let flaggedCount = 0;
+
+  for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
+    const row = values[rowIndex];
+
+    const originalState = String(row[cState] ?? "").trim();
+    const normalizedState = originalState.toUpperCase();
+
+    if (
+      normalizedState !== "" &&
+      !VALID_STATES.has(normalizedState)
+    ) {
+      row[cFlag] = "REVIEW";
+
+      row[cReason] = appendText(
+        row[cReason],
+        "Potential International Address"
+      );
+
+      row[cSuggestedFix] = appendText(
+        row[cSuggestedFix],
+        `State/Province "${originalState}" is not a standard US state abbreviation`
+      );
+
+      logRows.push([
+        row[cOriginalRow],
+        row[cAccountId],
+        "Billing State/Province",
+        originalState,
+        originalState,
+        "Invalid US state abbreviation",
+        "Flagged",
+        timestamp
+      ]);
+
+      flaggedCount++;
+    }
+
+    flagValues.push([row[cFlag]]);
+    reasonValues.push([row[cReason]]);
+    suggestedFixValues.push([row[cSuggestedFix]]);
+  }
+
+  // Write only the three columns modified by this phase.
+  sheet
+    .getRangeByIndexes(1, cFlag, rowCount, 1)
+    .setValues(flagValues);
+
+  sheet
+    .getRangeByIndexes(1, cReason, rowCount, 1)
+    .setValues(reasonValues);
+
+  sheet
+    .getRangeByIndexes(1, cSuggestedFix, rowCount, 1)
+    .setValues(suggestedFixValues);
+
+  appendRows(logSheet, logRows);
+
+  appendRows(summarySheet, [[
+    "Phase 5: Potential international addresses flagged",
+    flaggedCount
+  ]]);
+
+  console.log(
+    `PHASE 5 COMPLETE\n\n` +
+    `Potential international addresses flagged: ${flaggedCount}`
+  );
+}
