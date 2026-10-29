@@ -1,0 +1,157 @@
+/**
+ * PHASE 4
+ * ZIP+4 FORMAT VALIDATION
+ *
+ * Flags any ZIP code that is not exactly:
+ * ####рез-####
+ *
+ * Example of valid format:
+ * 91342-1234
+ */
+
+type Cell = string | number | boolean;
+
+const SUMMARY_SHEET = "Summary";
+
+function getColumn(headers: string[], name: string): number {
+  const index = headers.indexOf(name);
+
+  if (index === -1) {
+    throw new Error(`Required column not found: ${name}`);
+  }
+
+  return index;
+}
+
+function addFlag(
+  row: Cell[],
+  flagColumn: number,
+  reasonColumn: number,
+  suggestionColumn: number,
+  reason: string,
+  suggestion: string
+): void {
+  row[flagColumn] = "REVIEW";
+
+  const existingReason = String(row[reasonColumn] || "").trim();
+  const existingSuggestion = String(row[suggestionColumn] || "").trim();
+
+  row[reasonColumn] = existingReason
+    ? `${existingReason}; ${reason}`
+    : reason;
+
+  row[suggestionColumn] = existingSuggestion
+    ? `${existingSuggestion}; ${suggestion}`
+    : suggestion;
+}
+
+function appendSummary(
+  summarySheet: ExcelScript.Worksheet,
+  rows: Cell[][]
+): void {
+  if (rows.length === 0) return;
+
+  const usedRange = summarySheet.getUsedRange();
+  const nextRow = usedRange ? usedRange.getRowCount() : 0;
+
+  summarySheet
+    .getRangeByIndexes(nextRow, 0, rows.length, 2)
+    .setValues(rows);
+}
+
+function main(workbook: ExcelScript.Workbook): void {
+  const dataSheet = workbook.getActiveWorksheet();
+  const summarySheet = workbook.getWorksheet(SUMMARY_SHEET);
+
+  if (!summarySheet) {
+    throw new Error(`Worksheet not found: ${SUMMARY_SHEET}`);
+  }
+
+  if (dataSheet.getName() === SUMMARY_SHEET) {
+    throw new Error(
+      "Select the primary data worksheet before running Phase 4."
+    );
+  }
+
+  const dataRange = dataSheet.getUsedRange();
+
+  if (!dataRange) {
+    throw new Error("The active worksheet contains no data.");
+  }
+
+  const values = dataRange.getValues() as Cell[][];
+
+  if (values.length < 2) {
+    throw new Error(
+      "The active worksheet must contain headers and at least one data row."
+    );
+  }
+
+  const headers = values[0].map(value => String(value).trim());
+
+  const zipColumn = getColumn(
+    headers,
+    "Billing Zip/Postal Code"
+  );
+
+  const flagColumn = getColumn(
+    headers,
+    "Flag"
+  );
+
+  const reasonColumn = getColumn(
+    headers,
+    "Flag Reason"
+  );
+
+  const suggestionColumn = getColumn(
+    headers,
+    "Suggested Fix"
+  );
+
+  const zipPlus4Pattern = /^\d{5}-\d{4}$/;
+
+  let zipFlagCount = 0;
+
+  for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
+    const row = values[rowIndex];
+    const zip = String(row[zipColumn] || "").trim();
+
+    if (!zipPlus4Pattern.test(zip)) {
+      addFlag(
+        row,
+        flagColumn,
+        reasonColumn,
+        suggestionColumn,
+        "ZIP is not in ZIP+4 format",
+        "Enter ZIP as #####-####"
+      );
+
+      zipFlagCount++;
+    }
+  }
+
+  const rowCount = values.length;
+
+  dataSheet
+    .getRangeByIndexes(0, flagColumn, rowCount, 1)
+    .setValues(values.map(row => [row[flagColumn]]));
+
+  dataSheet
+    .getRangeByIndexes(0, reasonColumn, rowCount, 1)
+    .setValues(values.map(row => [row[reasonColumn]]));
+
+  dataSheet
+    .getRangeByIndexes(0, suggestionColumn, rowCount, 1)
+    .setValues(values.map(row => [row[suggestionColumn]]));
+
+  appendSummary(
+    summarySheet,
+    [["Phase 4: ZIP+4 format flags", zipFlagCount]]
+  );
+
+  console.log(
+    `PHASE 4 COMPLETE\n` +
+    `ZIP+4 format flags: ${zipFlagCount}`
+  );
+}
