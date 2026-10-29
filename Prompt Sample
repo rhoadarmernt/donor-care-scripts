@@ -1,0 +1,97 @@
+PROJECT BRIEF: Office Scripts data-cleanup automation for a donor mailing list
+
+ROLE
+You are an expert in Excel Office Scripts (TypeScript) and data cleaning for nonprofit/donor databases. Help me build, test, and refine a script that runs INSIDE Excel using Office Scripts (Automate tab). Do not give me VBA, Python, or Power Query unless I ask.
+
+CONTEXT
+I work in donor care at a nonprofit. I have an Excel sheet of roughly 7,000 rows: our mid/major donor list, exported from Salesforce. It will be used for mailings and likely re-imported into Salesforce, so accuracy matters and nothing should change without a record.
+
+COLUMNS (exact headers, in order)
+Last Activity | Account Name | Formal Greeting | Informal Greeting | Billing Street | Billing City | Billing Zip/Postal Code | Billing State/Province | Billing Country | Type | Last Modified Date | Account Case Safe ID | Primary Household ID | Average Gift
+
+Column notes:
+- Formal Greeting = the full formal name used on the envelope (e.g., "Matthew And Patricia Jones").
+- Informal Greeting = the first-name greeting used in letters (e.g., "Matthew and Patricia").
+- Account Case Safe ID and Primary Household ID are Salesforce identifiers. Use them for duplicate matching, but NEVER modify them.
+- Do NOT modify Last Activity, Type, Last Modified Date, or Average Gift. (Average Gift is a money amount.)
+- Locate columns by header name, not by fixed position, so the script survives column reordering.
+
+OFFICE SCRIPTS CONSTRAINTS (design around these)
+- Scripts are TypeScript with the signature function main(workbook: ExcelScript.Workbook). No external libraries or imports, and no VBA.
+- Read the whole used range once with getValues(), process everything in memory with arrays/Maps, then write back with setValues(). Avoid cell-by-cell reads/writes, since 7,000 rows will be very slow or time out.
+- Scripts have a runtime limit, so the design must be efficient. If needed, split the work into several smaller scripts run in sequence.
+- Don't rely on web requests for zip lookups. Instead, use a "ZipLookup" sheet inside the workbook (Zip5, City, State) that I can paste a free zip database into, and have the script read it into a Map.
+- Give me clear steps to create and run the script (Automate tab > New Script), written for a non-programmer.
+
+REQUIRED CHECKS AND FIXES
+
+1. Blank Billing Street -> delete the row
+   - If Billing Street is empty or only whitespace, remove the entire row.
+   - Because deletion is destructive: first copy the full original data to a backup sheet, and write every deleted row's full contents to the Changes Log so it can be restored.
+
+2. Formal Greeting vs. Informal Greeting
+   - Informal Greeting must match the first name(s) in Formal Greeting.
+   - Examples: Formal "John Smith" -> Informal "John". Formal "Matthew And Patricia Jones" -> Informal "Matthew and Patricia" (lowercase "and").
+   - Handle titles (Dr., Rev., Mr., Mrs., Hon.), couples with the same last name, couples with different last names, and suffixes (Jr., III).
+   - Auto-fix clear, high-confidence cases (e.g., "And" -> "and", casing, extra spaces). Flag ambiguous ones (hyphenated names, "The Smith Family", organizations, trusts, foundations, unusual titles).
+   - Use Account Name and Type as extra context for identifying organizations vs. households.
+
+3. Duplicate records
+   - Exact duplicates (all fields identical, or same Account Case Safe ID with identical data): merge into one row.
+   - Likely duplicates (same Primary Household ID, or same normalized street + zip + name): flag for review, do not auto-merge.
+   - Normalize before comparing: St/Street, Ave/Avenue, N/North, Apt/#/Unit, punctuation, case, extra spaces.
+   - When merging, keep the most complete row (most recent Last Activity as a tiebreaker) and log what was removed.
+
+4. Duplicated street text inside one Billing Street cell
+   - Detect and fix cases like "123 Main St Main St" or "456 Oak Ave 456 Oak Ave" by keeping the first instance. Log each change.
+
+5. Billing City / State / Zip validation
+   - Flag any Billing Zip/Postal Code that is not the full 9 digits (ZIP+4, e.g., 91342-1234 or 913421234). Do not guess the missing +4; just flag.
+   - Fix lost leading zeros (e.g., 2108 -> 02108) and flag zips with stray letters or spaces.
+   - Validate Billing City and Billing State/Province against the zip using the ZipLookup sheet. Treat zip as the most reliable field. Auto-fix only when confidence is high; otherwise flag with a suggestion.
+   - State must be a valid 2-letter US abbreviation (for US addresses).
+
+6. Foreign / international addresses
+   - Detect via Billing Country not being US/USA/United States (blank usually means US), non-US state/province values, or non-US postal code formats (e.g., Canadian A1A 1A1, UK).
+   - NEVER auto-fix these. Flag them for manual review, and skip the US zip/state checks for them.
+
+7. Misspellings
+   - Flag likely typos in names, street names, street suffixes, and city names, with a suggested correction.
+   - Auto-fix only obvious street suffix typos (e.g., "Steet" -> "Street"). Names are flag-and-suggest only, since real surnames often look like typos.
+
+8. Formatting cleanup
+   - Trim leading/trailing/double spaces; fix ALL CAPS or lowercase to proper case (careful with McDonald, O'Brien, DeLeon, III, PO Box).
+   - Normalize apartment/unit formatting, and flag PO Boxes.
+
+9. Extras (if practical)
+   - Missing-data report (blank City, State, Zip, Greetings, or IDs).
+   - A "Summary" sheet with counts per issue type, auto-fixes, flags, and deleted rows.
+
+CONFIDENCE LOGIC
+- High confidence -> auto-fix and log it.
+- Medium/low confidence -> do not change the data; flag it and put a suggested fix in a "Suggested Fix" column.
+- International addresses -> always flag, never fix.
+
+OUTPUT REQUIREMENTS
+- Never destroy the original: keep an untouched backup sheet of the raw data.
+- Create a "Changes Log" sheet with: Original row number, Account Case Safe ID, Column, Original value, New value, Rule triggered, Action (Auto-fixed / Flagged / Deleted / Merged), Timestamp.
+- Add helper columns to the cleaned sheet ("Flag", "Flag Reason", "Suggested Fix") rather than altering unrelated data. Color code: green = auto-fixed, yellow = needs review, red = foreign or unresolvable.
+
+MULTI-STEP BUILD PLAN (follow in order; test each phase before moving on)
+Phase 0 - Setup: Confirm I'm using Excel with Office Scripts available. Ask for ~15-20 anonymized sample rows to confirm formats. Create the ZipLookup sheet, and explain how to populate it.
+Phase 1 - Foundation: Script that backs up the raw data, finds columns by header name, reads the range into memory, and creates the Changes Log, Summary, and flag columns. Include a shared logging helper.
+Phase 2 - Row deletion and formatting cleanup: Delete blank-Billing-Street rows (logged), trim whitespace, fix casing, normalize suffix/unit formatting.
+Phase 3 - Street fixes: Duplicated street text detection and suffix typo fixes.
+Phase 4 - Zip/City/State: 9-digit zip flagging, leading-zero repair, lookup validation, and auto-fix vs. flag logic.
+Phase 5 - International detection: Flag foreign addresses and exclude them from US checks.
+Phase 6 - Greeting check: Formal vs. Informal Greeting comparison, with auto-fix and flag rules.
+Phase 7 - Duplicates: Exact-match merging, then fuzzy/likely-duplicate flagging.
+Phase 8 - Misspelling flags: Name/street/city typo suggestions.
+Phase 9 - Assembly and performance: Combine phases into one script (or a chained set if runtime limits require it), optimize for 7,000 rows, and add error handling.
+Phase 10 - Testing and handoff: Test on a 100-row sample, then the full list; review the Summary and Changes Log; write plain-English run instructions and a "how to undo" guide.
+
+HOW I WANT YOU TO WORK
+- Build one phase at a time and give me complete, copy-paste-ready TypeScript for each.
+- After each phase, tell me exactly how to test it on a small sample, and wait for my results before continuing.
+- Keep explanations plain and beginner-friendly, and comment the code.
+- Start by confirming you understand the project, then ask any clarifying questions you need.
