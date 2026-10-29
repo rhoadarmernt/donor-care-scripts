@@ -1,6 +1,6 @@
 /**
  * PHASE 3
- * STREET ADDRESS LENGTH AND DUPLICATE REVIEW
+ * STREET ADDRESS DUPLICATE AND CITY REVIEW
  *
  * Automatically fixes:
  *   1. Entire duplicated addresses
@@ -12,14 +12,16 @@
  *      -> 123 Main St
  *
  * Flags:
- *   1. Addresses containing 2 words or fewer
- *   2. Addresses containing 5 words or more
+ *   1. A street address containing exactly one word
+ *   2. A street address containing the Billing City
  *   3. Possible duplicate Apt/Unit text
  *
  * Does not:
  *   - Change capitalization
  *   - Correct spelling
  *   - Standardize street suffixes
+ *   - Flag blank street addresses
+ *   - Flag addresses based on a maximum word count
  *
  * Requires:
  *   - Phase 1 completed
@@ -169,6 +171,47 @@ function getWordCount(value: string): number {
   return trimmed.split(/\s+/).length;
 }
 
+/**
+ * Normalizes text for city-name comparison.
+ *
+ * Examples:
+ *   "St. Louis" -> "st louis"
+ *   "LOS ANGELES," -> "los angeles"
+ */
+function normalizeForComparison(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Determines whether the full city name appears in the
+ * street address as a complete word or phrase.
+ *
+ * This prevents a city such as "York" from matching
+ * a word such as "Yorkshire."
+ */
+function streetContainsCity(
+  street: string,
+  city: string
+): boolean {
+  const normalizedStreet = normalizeForComparison(street);
+  const normalizedCity = normalizeForComparison(city);
+
+  if (
+    normalizedStreet === "" ||
+    normalizedCity === ""
+  ) {
+    return false;
+  }
+
+  return ` ${normalizedStreet} `.includes(
+    ` ${normalizedCity} `
+  );
+}
+
 // ----------------------------------------------------
 // DUPLICATE STREET DETECTION
 // ----------------------------------------------------
@@ -246,13 +289,13 @@ function removeRepeatedEnding(
   ];
 
   for (let index = 0; index < suffixes.length; index++) {
-    const suffix = suffixes[index].replace(
+    const escapedSuffix = suffixes[index].replace(
       ".",
       "\\."
     );
 
     const pattern = new RegExp(
-      `(.*)\\s+([^\\s]+\\s+${suffix})\\s+\\2$`,
+      `(.*)\\s+([^\\s]+\\s+${escapedSuffix})\\s+\\2$`,
       "i"
     );
 
@@ -317,6 +360,10 @@ function main(workbook: ExcelScript.Workbook): void {
       headers,
       "Billing Street"
     ),
+    city: getColumnIndex(
+      headers,
+      "Billing City"
+    ),
     originalRow: getColumnIndex(
       headers,
       "Original Row"
@@ -342,8 +389,8 @@ function main(workbook: ExcelScript.Workbook): void {
   const logEntries: Cell[][] = [];
 
   let duplicateFixCount = 0;
-  let shortAddressFlagCount = 0;
-  let longAddressFlagCount = 0;
+  let oneWordFlagCount = 0;
+  let cityInStreetFlagCount = 0;
   let duplicateUnitFlagCount = 0;
   let totalFlaggedRowCount = 0;
 
@@ -359,6 +406,10 @@ function main(workbook: ExcelScript.Workbook): void {
 
     let street = String(
       row[columns.street] || ""
+    ).trim();
+
+    const city = String(
+      row[columns.city] || ""
     ).trim();
 
     let rowFlaggedByPhase = false;
@@ -419,15 +470,14 @@ function main(workbook: ExcelScript.Workbook): void {
     row[columns.street] = street;
 
     // ------------------------------------------------
-    // WORD-COUNT VALIDATION
+    // ONE-WORD ADDRESS
     // ------------------------------------------------
 
     const wordCount = getWordCount(street);
 
-    if (wordCount <= 1) {
-      const reason = wordCount === 0
-        ? "Street address is blank"
-        : "Street address contains 1 words or fewer";
+    if (wordCount === 1) {
+      const reason =
+        "Street address contains only one word";
 
       addFlag(
         row,
@@ -450,13 +500,17 @@ function main(workbook: ExcelScript.Workbook): void {
         )
       );
 
-      shortAddressFlagCount++;
+      oneWordFlagCount++;
       rowFlaggedByPhase = true;
     }
 
-    if (wordCount >= 7) {
+    // ------------------------------------------------
+    // CITY NAME FOUND IN STREET ADDRESS
+    // ------------------------------------------------
+
+    if (streetContainsCity(street, city)) {
       const reason =
-        "Street address contains 7 words or more";
+        "City name found in street address";
 
       addFlag(
         row,
@@ -464,7 +518,7 @@ function main(workbook: ExcelScript.Workbook): void {
         columns.reason,
         columns.suggestion,
         reason,
-        "Verify the complete street address"
+        `Remove "${city}" from Billing Street if inappropriate`
       );
 
       logEntries.push(
@@ -479,7 +533,7 @@ function main(workbook: ExcelScript.Workbook): void {
         )
       );
 
-      longAddressFlagCount++;
+      cityInStreetFlagCount++;
       rowFlaggedByPhase = true;
     }
 
@@ -578,12 +632,12 @@ function main(workbook: ExcelScript.Workbook): void {
         duplicateFixCount
       ],
       [
-        "Phase 3: addresses with 1 word or fewer",
-        shortAddressFlagCount
+        "Phase 3: one-word street addresses",
+        oneWordFlagCount
       ],
       [
-        "Phase 3: addresses with 7 words or more",
-        longAddressFlagCount
+        "Phase 3: city found in street address",
+        cityInStreetFlagCount
       ],
       [
         "Phase 3: duplicate Apt/Unit flags",
@@ -600,8 +654,8 @@ function main(workbook: ExcelScript.Workbook): void {
   console.log(
     `PHASE 3 COMPLETE\n` +
     `Duplicate street fixes: ${duplicateFixCount}\n` +
-    `Addresses with 1 word or fewer: ${shortAddressFlagCount}\n` +
-    `Addresses with 7 words or more: ${longAddressFlagCount}\n` +
+    `One-word street addresses: ${oneWordFlagCount}\n` +
+    `City found in street address: ${cityInStreetFlagCount}\n` +
     `Duplicate Apt/Unit flags: ${duplicateUnitFlagCount}\n` +
     `Total rows flagged: ${totalFlaggedRowCount}`
   );
