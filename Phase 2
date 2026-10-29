@@ -1,5 +1,5 @@
 /**
- * PHASE 2 - ROW DELETION & BASIC CLEANUP
+ * PHASE 2 - BLANK ADDRESS REMOVAL & BASIC DATA CLEANUP
  */
 
 type Cell = string | number | boolean;
@@ -35,14 +35,11 @@ const CASE_FIX_COLUMNS = [
   "Billing City"
 ];
 
-const STATE_COLUMN = "Billing State/Province";
-
 // --------------------------------------------------
 // HELPERS
 // --------------------------------------------------
 
 function formatTimestamp(): string {
-
   const d = new Date();
 
   const yyyy = d.getFullYear();
@@ -59,7 +56,6 @@ function appendLog(
   log: ExcelScript.Worksheet,
   entries: Cell[][]
 ): void {
-
   if (entries.length === 0) return;
 
   const nextRow =
@@ -79,7 +75,6 @@ function appendSummary(
   summary: ExcelScript.Worksheet,
   rows: Cell[][]
 ): void {
-
   if (rows.length === 0) return;
 
   const nextRow =
@@ -104,7 +99,6 @@ function logRow(
   rule: string,
   action: string
 ): Cell[] {
-
   return [
     originalRow,
     accountId,
@@ -121,7 +115,6 @@ function colIndex(
   headers: string[],
   name: string
 ): number {
-
   const idx = headers.indexOf(name);
 
   if (idx === -1) {
@@ -140,7 +133,6 @@ function colIndex(
 function cleanSpaces(
   value: string
 ): string {
-
   return value
     .replace(/[\u200B\uFEFF]/g, "")
     .replace(/\s+/g, " ")
@@ -155,11 +147,9 @@ const DIRECTIONALS = [
 function capWord(
   word: string
 ): string {
-
   const lower = word.toLowerCase();
 
   if (/^mc[a-z]/.test(lower)) {
-
     return (
       "Mc" +
       lower.charAt(2).toUpperCase() +
@@ -168,7 +158,6 @@ function capWord(
   }
 
   if (/^[a-z]'[a-z]/.test(lower)) {
-
     return (
       lower.charAt(0).toUpperCase() +
       "'" +
@@ -186,7 +175,6 @@ function capWord(
 function properCaseToken(
   token: string
 ): string {
-
   if (!token) return token;
 
   const bare =
@@ -224,7 +212,6 @@ function properCaseToken(
 function properCase(
   value: string
 ): string {
-
   return value
     .split(" ")
     .map(token => properCaseToken(token))
@@ -234,7 +221,6 @@ function properCase(
 function needsCaseFix(
   value: string
 ): boolean {
-
   if (!/[A-Za-z]/.test(value)) {
     return false;
   }
@@ -252,7 +238,6 @@ function needsCaseFix(
 function main(
   workbook: ExcelScript.Workbook
 ) {
-
   const dataSheet =
     workbook.getActiveWorksheet();
 
@@ -267,7 +252,6 @@ function main(
       DELETED_SHEET
     ].includes(sheetName)
   ) {
-
     throw new Error(
       "Activate the donor data sheet first."
     );
@@ -278,7 +262,6 @@ function main(
       BACKUP_SHEET
     )
   ) {
-
     throw new Error(
       "Run Phase 1 first."
     );
@@ -304,7 +287,6 @@ function main(
     !summary ||
     !deletedSheet
   ) {
-
     throw new Error(
       "Changes Log, Summary, or Deleted Rows sheet missing."
     );
@@ -343,12 +325,6 @@ function main(
       "Billing Street"
     );
 
-  const cState =
-    colIndex(
-      headers,
-      STATE_COLUMN
-    );
-
   const entries: Cell[][] = [];
   const kept: Cell[][] = [];
   const deletedRows: Cell[][] = [];
@@ -356,7 +332,6 @@ function main(
   let deletedCount = 0;
   let spaceFixes = 0;
   let caseFixes = 0;
-  let stateFixes = 0;
 
   const spaceCols =
     SPACE_CLEAN_COLUMNS.map(
@@ -373,7 +348,6 @@ function main(
     i < values.length;
     i++
   ) {
-
     const row = [...values[i]];
 
     const street =
@@ -388,7 +362,6 @@ function main(
     // ----------------------------------
 
     if (street === "") {
-
       deletedCount++;
 
       const originalRecord =
@@ -431,7 +404,6 @@ function main(
     // ----------------------------------
 
     for (const col of spaceCols) {
-
       const value = row[col];
 
       if (
@@ -444,7 +416,6 @@ function main(
         cleanSpaces(value);
 
       if (cleaned !== value) {
-
         row[col] = cleaned;
 
         spaceFixes++;
@@ -468,7 +439,6 @@ function main(
     // ----------------------------------
 
     for (const col of caseCols) {
-
       const value = row[col];
 
       if (
@@ -482,7 +452,6 @@ function main(
         properCase(value);
 
       if (fixed !== value) {
-
         row[col] = fixed;
 
         caseFixes++;
@@ -501,39 +470,8 @@ function main(
       }
     }
 
-    // ----------------------------------
-    // STATE ABBREVIATIONS
-    // ----------------------------------
-
-    const state = row[cState];
-
-    if (
-      typeof state === "string" &&
-      /^[A-Za-z]{2}$/.test(state) &&
-      state !== state.toUpperCase()
-    ) {
-
-      row[cState] =
-        state.toUpperCase();
-
-      stateFixes++;
-
-      entries.push(
-        logRow(
-          originalRow,
-          accountId,
-          headers[cState],
-          state,
-          state.toUpperCase(),
-          "Uppercase state code",
-          "Auto-fixed"
-        )
-      );
-    }
-
     kept.push(row);
   }
-
 
   const rebuilt = [
     headers,
@@ -554,7 +492,6 @@ function main(
     .setValues(rebuilt);
 
   if (deletedRows.length > 0) {
-
     const nextDeletedRow =
       deletedSheet
         .getUsedRange()
@@ -576,7 +513,6 @@ function main(
     ["Phase 2: rows deleted", deletedCount],
     ["Phase 2: whitespace fixes", spaceFixes],
     ["Phase 2: capitalization fixes", caseFixes],
-    ["Phase 2: state code fixes", stateFixes],
     ["Data rows after Phase 2", kept.length]
   ]);
 
@@ -586,7 +522,6 @@ function main(
 Rows deleted: ${deletedCount}
 Whitespace fixes: ${spaceFixes}
 Capitalization fixes: ${caseFixes}
-State fixes: ${stateFixes}
 Remaining rows: ${kept.length}`
   );
 }
