@@ -4,9 +4,6 @@
 
 type Cell = string | number | boolean;
 
-const DRY_RUN = false;
-const MAX_DELETE_FRACTION = 0.20;
-
 const BACKUP_SHEET = "Raw Backup";
 const LOG_SHEET = "Changes Log";
 const SUMMARY_SHEET = "Summary";
@@ -537,40 +534,6 @@ function main(
     kept.push(row);
   }
 
-  const totalRows =
-    values.length - 1;
-
-  const deleteFraction =
-    totalRows === 0
-      ? 0
-      : deletedCount / totalRows;
-
-  if (
-    deleteFraction >
-    MAX_DELETE_FRACTION
-  ) {
-
-    throw new Error(
-      `${deletedCount} rows would be deleted (${(
-        deleteFraction * 100
-      ).toFixed(1)}%), exceeding the safety limit.`
-    );
-  }
-
-  if (DRY_RUN) {
-
-    console.log(
-      `PREVIEW ONLY
-
-Rows deleted: ${deletedCount}
-Whitespace fixes: ${spaceFixes}
-Capitalization fixes: ${caseFixes}
-State fixes: ${stateFixes}
-Rows remaining: ${kept.length}`
-    );
-
-    return;
-  }
 
   const rebuilt = [
     headers,
