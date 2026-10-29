@@ -10,6 +10,7 @@ const MAX_DELETE_FRACTION = 0.20;
 const BACKUP_SHEET = "Raw Backup";
 const LOG_SHEET = "Changes Log";
 const SUMMARY_SHEET = "Summary";
+const DELETED_SHEET = "Deleted Rows";
 
 const LOG_HEADERS = [
   "Original Row",
@@ -43,13 +44,37 @@ const STATE_COLUMN = "Billing State/Province";
 // HELPERS
 // --------------------------------------------------
 
-function appendLog(log: ExcelScript.Worksheet, entries: Cell[][]): void {
+function formatTimestamp(): string {
+
+  const d = new Date();
+
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+
+  const hh = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+}
+
+function appendLog(
+  log: ExcelScript.Worksheet,
+  entries: Cell[][]
+): void {
+
   if (entries.length === 0) return;
 
-  const nextRow = log.getUsedRange().getRowCount();
+  const nextRow =
+    log.getUsedRange().getRowCount();
 
   log
-    .getRangeByIndexes(nextRow, 0, entries.length, LOG_HEADERS.length)
+    .getRangeByIndexes(
+      nextRow,
+      0,
+      entries.length,
+      LOG_HEADERS.length
+    )
     .setValues(entries);
 }
 
@@ -60,10 +85,16 @@ function appendSummary(
 
   if (rows.length === 0) return;
 
-  const nextRow = summary.getUsedRange().getRowCount();
+  const nextRow =
+    summary.getUsedRange().getRowCount();
 
   summary
-    .getRangeByIndexes(nextRow, 0, rows.length, 2)
+    .getRangeByIndexes(
+      nextRow,
+      0,
+      rows.length,
+      2
+    )
     .setValues(rows);
 }
 
@@ -85,16 +116,21 @@ function logRow(
     newValue,
     rule,
     action,
-    new Date().toISOString()
+    formatTimestamp()
   ];
 }
 
-function colIndex(headers: string[], name: string): number {
+function colIndex(
+  headers: string[],
+  name: string
+): number {
 
   const idx = headers.indexOf(name);
 
   if (idx === -1) {
-    throw new Error(`Column not found: "${name}"`);
+    throw new Error(
+      `Column not found: "${name}"`
+    );
   }
 
   return idx;
@@ -104,7 +140,9 @@ function colIndex(headers: string[], name: string): number {
 // TEXT FUNCTIONS
 // --------------------------------------------------
 
-function cleanSpaces(value: string): string {
+function cleanSpaces(
+  value: string
+): string {
 
   return value
     .replace(/[\u200B\uFEFF]/g, "")
@@ -117,17 +155,23 @@ const DIRECTIONALS = [
   "NE", "NW", "SE", "SW"
 ];
 
-function capWord(word: string): string {
+function capWord(
+  word: string
+): string {
 
   const lower = word.toLowerCase();
 
   if (/^mc[a-z]/.test(lower)) {
-    return "Mc" +
+
+    return (
+      "Mc" +
       lower.charAt(2).toUpperCase() +
-      lower.substring(3);
+      lower.substring(3)
+    );
   }
 
   if (/^[a-z]'[a-z]/.test(lower)) {
+
     return (
       lower.charAt(0).toUpperCase() +
       "'" +
@@ -142,14 +186,21 @@ function capWord(word: string): string {
   );
 }
 
-function properCaseToken(token: string): string {
+function properCaseToken(
+  token: string
+): string {
 
   if (!token) return token;
 
-  const bare = token.replace(/\./g, "");
-  const upper = bare.toUpperCase();
+  const bare =
+    token.replace(/\./g, "");
 
-  if (DIRECTIONALS.indexOf(upper) !== -1) {
+  const upper =
+    bare.toUpperCase();
+
+  if (
+    DIRECTIONALS.indexOf(upper) !== -1
+  ) {
     return upper;
   }
 
@@ -157,7 +208,9 @@ function properCaseToken(token: string): string {
     return "PO";
   }
 
-  if (/^\d+(ST|ND|RD|TH)$/i.test(token)) {
+  if (
+    /^\d+(ST|ND|RD|TH)$/i.test(token)
+  ) {
     return token.toLowerCase();
   }
 
@@ -171,7 +224,9 @@ function properCaseToken(token: string): string {
     .join("-");
 }
 
-function properCase(value: string): string {
+function properCase(
+  value: string
+): string {
 
   return value
     .split(" ")
@@ -179,7 +234,9 @@ function properCase(value: string): string {
     .join(" ");
 }
 
-function needsCaseFix(value: string): boolean {
+function needsCaseFix(
+  value: string
+): boolean {
 
   if (!/[A-Za-z]/.test(value)) {
     return false;
@@ -195,91 +252,168 @@ function needsCaseFix(value: string): boolean {
 // MAIN
 // --------------------------------------------------
 
-function main(workbook: ExcelScript.Workbook) {
+function main(
+  workbook: ExcelScript.Workbook
+) {
 
-  const dataSheet = workbook.getActiveWorksheet();
+  const dataSheet =
+    workbook.getActiveWorksheet();
 
-  const sheetName = dataSheet.getName();
+  const sheetName =
+    dataSheet.getName();
 
   if (
     [
       BACKUP_SHEET,
       LOG_SHEET,
       SUMMARY_SHEET,
-      "ZipLookup"
+      DELETED_SHEET
     ].includes(sheetName)
   ) {
+
     throw new Error(
       "Activate the donor data sheet first."
     );
   }
 
-  if (!workbook.getWorksheet(BACKUP_SHEET)) {
+  if (
+    !workbook.getWorksheet(
+      BACKUP_SHEET
+    )
+  ) {
+
     throw new Error(
       "Run Phase 1 first."
     );
   }
 
-  const log = workbook.getWorksheet(LOG_SHEET);
-  const summary = workbook.getWorksheet(SUMMARY_SHEET);
+  const log =
+    workbook.getWorksheet(
+      LOG_SHEET
+    );
 
-  if (!log || !summary) {
+  const summary =
+    workbook.getWorksheet(
+      SUMMARY_SHEET
+    );
+
+  const deletedSheet =
+    workbook.getWorksheet(
+      DELETED_SHEET
+    );
+
+  if (
+    !log ||
+    !summary ||
+    !deletedSheet
+  ) {
+
     throw new Error(
-      "Changes Log or Summary sheet missing."
+      "Changes Log, Summary, or Deleted Rows sheet missing."
     );
   }
 
-  const used = dataSheet.getUsedRange();
+  const used =
+    dataSheet.getUsedRange();
 
   if (!used) {
     throw new Error("No data found.");
   }
 
-  const values = used.getValues();
+  const values =
+    used.getValues();
 
-  const headers = values[0]
-    .map(v => String(v).trim());
+  const headers =
+    values[0].map(v =>
+      String(v).trim()
+    );
 
-  const cOrig = colIndex(headers, "Original Row");
-  const cId = colIndex(headers, "Account Case Safe ID");
-  const cAcct = colIndex(headers, "Account Name");
-  const cStreet = colIndex(headers, "Billing Street");
-  const cState = colIndex(headers, STATE_COLUMN);
+  const cOrig =
+    colIndex(headers, "Original Row");
+
+  const originalColumnCount =
+    cOrig;
+
+  const cId =
+    colIndex(
+      headers,
+      "Account Case Safe ID"
+    );
+
+  const cStreet =
+    colIndex(
+      headers,
+      "Billing Street"
+    );
+
+  const cState =
+    colIndex(
+      headers,
+      STATE_COLUMN
+    );
 
   const entries: Cell[][] = [];
   const kept: Cell[][] = [];
+  const deletedRows: Cell[][] = [];
 
   let deletedCount = 0;
   let spaceFixes = 0;
   let caseFixes = 0;
   let stateFixes = 0;
 
-  const spaceCols = SPACE_CLEAN_COLUMNS.map(
-    h => colIndex(headers, h)
-  );
+  const spaceCols =
+    SPACE_CLEAN_COLUMNS.map(
+      h => colIndex(headers, h)
+    );
 
-  const caseCols = CASE_FIX_COLUMNS.map(
-    h => colIndex(headers, h)
-  );
+  const caseCols =
+    CASE_FIX_COLUMNS.map(
+      h => colIndex(headers, h)
+    );
 
-  for (let i = 1; i < values.length; i++) {
+  for (
+    let i = 1;
+    i < values.length;
+    i++
+  ) {
 
     const row = [...values[i]];
 
-    const street = cleanSpaces(
-      String(row[cStreet] ?? "")
-    );
+    const street =
+      cleanSpaces(
+        String(
+          row[cStreet] ?? ""
+        )
+      );
+
+    // ----------------------------------
+    // DELETE BLANK STREET ROWS
+    // ----------------------------------
 
     if (street === "") {
 
       deletedCount++;
 
+      const originalRecord =
+        row.slice(
+          0,
+          originalColumnCount
+        );
+
+      deletedRows.push([
+        "Blank Billing Street",
+        formatTimestamp(),
+        ...originalRecord
+      ]);
+
       entries.push(
         logRow(
           row[cOrig],
           row[cId],
-          "ENTIRE ROW",
-          JSON.stringify(row),
+          "ROW SNAPSHOT",
+          JSON.stringify(
+            originalRecord
+          ),
           "(row deleted)",
           "Blank Billing Street",
           "Deleted"
@@ -289,18 +423,28 @@ function main(workbook: ExcelScript.Workbook) {
       continue;
     }
 
-    const originalRow = row[cOrig];
-    const accountId = row[cId];
+    const originalRow =
+      row[cOrig];
 
-    // whitespace cleanup
+    const accountId =
+      row[cId];
+
+    // ----------------------------------
+    // WHITESPACE CLEANUP
+    // ----------------------------------
 
     for (const col of spaceCols) {
 
       const value = row[col];
 
-      if (typeof value !== "string") continue;
+      if (
+        typeof value !== "string"
+      ) {
+        continue;
+      }
 
-      const cleaned = cleanSpaces(value);
+      const cleaned =
+        cleanSpaces(value);
 
       if (cleaned !== value) {
 
@@ -322,7 +466,9 @@ function main(workbook: ExcelScript.Workbook) {
       }
     }
 
-    // casing
+    // ----------------------------------
+    // ADDRESS CAPITALIZATION
+    // ----------------------------------
 
     for (const col of caseCols) {
 
@@ -335,7 +481,8 @@ function main(workbook: ExcelScript.Workbook) {
         continue;
       }
 
-      const fixed = properCase(value);
+      const fixed =
+        properCase(value);
 
       if (fixed !== value) {
 
@@ -357,7 +504,9 @@ function main(workbook: ExcelScript.Workbook) {
       }
     }
 
-    // state codes
+    // ----------------------------------
+    // STATE ABBREVIATIONS
+    // ----------------------------------
 
     const state = row[cState];
 
@@ -367,7 +516,8 @@ function main(workbook: ExcelScript.Workbook) {
       state !== state.toUpperCase()
     ) {
 
-      row[cState] = state.toUpperCase();
+      row[cState] =
+        state.toUpperCase();
 
       stateFixes++;
 
@@ -387,14 +537,18 @@ function main(workbook: ExcelScript.Workbook) {
     kept.push(row);
   }
 
-  const totalRows = values.length - 1;
+  const totalRows =
+    values.length - 1;
 
   const deleteFraction =
     totalRows === 0
       ? 0
       : deletedCount / totalRows;
 
-  if (deleteFraction > MAX_DELETE_FRACTION) {
+  if (
+    deleteFraction >
+    MAX_DELETE_FRACTION
+  ) {
 
     throw new Error(
       `${deletedCount} rows would be deleted (${(
@@ -418,16 +572,14 @@ Rows remaining: ${kept.length}`
     return;
   }
 
-  // -------------------------------------
-  // REBUILD SHEET
-  // -------------------------------------
-
-  const rebuilt: (string | number | boolean)[][] = [
+  const rebuilt = [
     headers,
     ...kept
   ];
 
-  dataSheet.getUsedRange()?.clear();
+  dataSheet
+    .getUsedRange()
+    ?.clear();
 
   dataSheet
     .getRangeByIndexes(
@@ -437,6 +589,23 @@ Rows remaining: ${kept.length}`
       rebuilt[0].length
     )
     .setValues(rebuilt);
+
+  if (deletedRows.length > 0) {
+
+    const nextDeletedRow =
+      deletedSheet
+        .getUsedRange()
+        .getRowCount();
+
+    deletedSheet
+      .getRangeByIndexes(
+        nextDeletedRow,
+        0,
+        deletedRows.length,
+        deletedRows[0].length
+      )
+      .setValues(deletedRows);
+  }
 
   appendLog(log, entries);
 
