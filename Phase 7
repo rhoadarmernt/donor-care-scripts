@@ -1,0 +1,435 @@
+/**
+ * PHASE 7A - DUPLICATE DETECTION
+ *
+ * Auto Deletes:
+ *   - Exact duplicate rows
+ *
+ * Flags:
+ *   - Shared Billing Street
+ *   - Shared Primary Household ID
+ *
+ * Requires Phase 1.
+ */
+
+type Cell = string | number | boolean;
+
+const LOG_SHEET = "Changes Log";
+const SUMMARY_SHEET = "Summary";
+const BACKUP_SHEET = "Raw Backup";
+
+// --------------------------------------------------
+// HELPERS
+// --------------------------------------------------
+
+function colIndex(headers: string[], name: string): number {
+
+  const idx = headers.indexOf(name);
+
+  if (idx === -1) {
+    throw new Error(`Column not found: ${name}`);
+  }
+
+  return idx;
+}
+
+function appendText(existing: string, value: string): string {
+
+  if (!existing) {
+    return value;
+  }
+
+  if (existing.includes(value)) {
+    return existing;
+  }
+
+  return existing + "; " + value;
+}
+
+function logRow(
+  originalRow: Cell,
+  accountId: Cell,
+  column: string,
+  oldValue: Cell,
+  newValue: Cell,
+  rule: string,
+  action: string
+): Cell[] {
+
+  return [
+    originalRow,
+    accountId,
+    column,
+    oldValue,
+    newValue,
+    rule,
+    action,
+    new Date().toISOString()
+  ];
+}
+
+function appendLog(
+  sheet: ExcelScript.Worksheet,
+  rows: Cell[][]
+): void {
+
+  if (rows.length === 0) return;
+
+  const nextRow =
+    sheet.getUsedRange().getRowCount();
+
+  sheet
+    .getRangeByIndexes(
+      nextRow,
+      0,
+      rows.length,
+      8
+    )
+    .setValues(rows);
+}
+
+function appendSummary(
+  sheet: ExcelScript.Worksheet,
+  rows: Cell[][]
+): void {
+
+  if (rows.length === 0) return;
+
+  const nextRow =
+    sheet.getUsedRange().getRowCount();
+
+  sheet
+    .getRangeByIndexes(
+      nextRow,
+      0,
+      rows.length,
+      2
+    )
+    .setValues(rows);
+}
+
+function normalizeStreet(
+  street: string
+): string {
+
+  return street
+    .toUpperCase()
+    .replace(/\./g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\bSTREET\b/g, "ST")
+    .replace(/\bAVENUE\b/g, "AVE")
+    .replace(/\bROAD\b/g, "RD")
+    .replace(/\bDRIVE\b/g, "DR")
+    .replace(/\bLANE\b/g, "LN")
+    .replace(/\bBOULEVARD\b/g, "BLVD")
+    .replace(/\bCOURT\b/g, "CT");
+}
+
+// --------------------------------------------------
+// MAIN
+// --------------------------------------------------
+
+function main(workbook: ExcelScript.Workbook) {
+
+  const sheet =
+    workbook.getActiveWorksheet();
+
+  if (
+    [
+      LOG_SHEET,
+      SUMMARY_SHEET,
+      BACKUP_SHEET,
+      "ZipLookup"
+    ].includes(sheet.getName())
+  ) {
+    throw new Error(
+      "Activate your donor worksheet first."
+    );
+  }
+
+  const logSheet =
+    workbook.getWorksheet(LOG_SHEET);
+
+  const summarySheet =
+    workbook.getWorksheet(SUMMARY_SHEET);
+
+  if (!logSheet || !summarySheet) {
+    throw new Error(
+      "Run Phase 1 first."
+    );
+  }
+
+  const used =
+    sheet.getUsedRange();
+
+  if (!used) {
+    throw new Error(
+      "No data found."
+    );
+  }
+
+  const values =
+    used.getValues();
+
+  const headers =
+    values[0].map(v =>
+      String(v).trim()
+    );
+
+  const cOrig =
+    colIndex(headers, "Original Row");
+
+  const cId =
+    colIndex(headers, "Account Case Safe ID");
+
+  const cStreet =
+    colIndex(headers, "Billing Street");
+
+  const cHousehold =
+    colIndex(headers, "Primary Household ID");
+
+  const cFlag =
+    colIndex(headers, "Flag");
+
+  const cReason =
+    colIndex(headers, "Flag Reason");
+
+  const cSuggest =
+    colIndex(headers, "Suggested Fix");
+
+  const logs: Cell[][] = [];
+
+  const streetMap =
+    new Map<string, number[]>();
+
+  const householdMap =
+    new Map<string, number[]>();
+
+  const rowKeyMap =
+    new Map<string, number>();
+
+  const keptRows: Cell[][] = [];
+
+  let deletedExactDuplicates = 0;
+  let streetFlags = 0;
+  let householdFlags = 0;
+
+  // --------------------------------
+  // PASS 1
+  // Remove exact duplicates
+  // --------------------------------
+
+  for (let r = 1; r < values.length; r++) {
+
+    const row = values[r];
+
+    const rowKey =
+      JSON.stringify(row);
+
+    if (rowKeyMap.has(rowKey)) {
+
+      deletedExactDuplicates++;
+
+      logs.push(
+        logRow(
+          row[cOrig],
+          row[cId],
+          "ENTIRE ROW",
+          rowKey,
+          "(row deleted)",
+          "Exact duplicate row",
+          "Deleted"
+        )
+      );
+
+      continue;
+    }
+
+    rowKeyMap.set(rowKey, r);
+
+    keptRows.push(row);
+  }
+
+  // --------------------------------
+  // PASS 2
+  // Build lookups
+  // --------------------------------
+
+  for (let r = 0; r < keptRows.length; r++) {
+
+    const row = keptRows[r];
+
+    const street =
+      normalizeStreet(
+        String(
+          row[cStreet] || ""
+        )
+      );
+
+    if (street) {
+
+      if (!streetMap.has(street)) {
+        streetMap.set(street, []);
+      }
+
+      streetMap.get(street)!.push(r);
+    }
+
+    const household =
+      String(
+        row[cHousehold] || ""
+      ).trim();
+
+    if (household) {
+
+      if (!householdMap.has(household)) {
+        householdMap.set(household, []);
+      }
+
+      householdMap
+        .get(household)!
+        .push(r);
+    }
+  }
+
+  // --------------------------------
+  // PASS 3
+  // Street duplicate flags
+  // --------------------------------
+
+  streetMap.forEach((rows, street) => {
+
+    if (rows.length < 2) {
+      return;
+    }
+
+    for (const r of rows) {
+
+      const row =
+        keptRows[r];
+
+      row[cFlag] = "REVIEW";
+
+      row[cReason] = appendText(
+        String(
+          row[cReason] || ""
+        ),
+        "Duplicate street address"
+      );
+
+      row[cSuggest] = appendText(
+        String(
+          row[cSuggest] || ""
+        ),
+        `Another record shares street: ${street}`
+      );
+
+      streetFlags++;
+
+      logs.push(
+        logRow(
+          row[cOrig],
+          row[cId],
+          "Billing Street",
+          row[cStreet],
+          row[cStreet],
+          "Shared Billing Street",
+          "Flagged"
+        )
+      );
+    }
+  });
+
+  // --------------------------------
+  // PASS 4
+  // Household flags
+  // --------------------------------
+
+  householdMap.forEach((rows, householdId) => {
+
+    if (rows.length < 2) {
+      return;
+    }
+
+    for (const r of rows) {
+
+      const row =
+        keptRows[r];
+
+      row[cFlag] = "REVIEW";
+
+      row[cReason] = appendText(
+        String(
+          row[cReason] || ""
+        ),
+        "Duplicate household ID"
+      );
+
+      row[cSuggest] = appendText(
+        String(
+          row[cSuggest] || ""
+        ),
+        `Shared household ID: ${householdId}`
+      );
+
+      householdFlags++;
+
+      logs.push(
+        logRow(
+          row[cOrig],
+          row[cId],
+          "Primary Household ID",
+          householdId,
+          householdId,
+          "Shared Household ID",
+          "Flagged"
+        )
+      );
+    }
+  });
+
+  // --------------------------------
+  // Rewrite sheet
+  // --------------------------------
+
+  const rebuilt = [
+    headers,
+    ...keptRows
+  ];
+
+  sheet.getUsedRange()?.clear();
+
+  sheet
+    .getRangeByIndexes(
+      0,
+      0,
+      rebuilt.length,
+      rebuilt[0].length
+    )
+    .setValues(rebuilt);
+
+  appendLog(logSheet, logs);
+
+  appendSummary(summarySheet, [
+    [
+      "Phase 7A: Exact duplicates deleted",
+      deletedExactDuplicates
+    ],
+    [
+      "Phase 7A: Duplicate street flags",
+      streetFlags
+    ],
+    [
+      "Phase 7A: Duplicate household flags",
+      householdFlags
+    ]
+  ]);
+
+  console.log(
+    `PHASE 7A COMPLETE
+
+Exact duplicates deleted: ${deletedExactDuplicates}
+Duplicate street flags: ${streetFlags}
+Duplicate household flags: ${householdFlags}`
+  );
+}
