@@ -1,0 +1,558 @@
+/**
+ * PHASE 3 - STREET FIXES
+ *
+ * Detects:
+ *   1. Duplicate street text
+ *      Example:
+ *      123 Main St Main St
+ *      -> 123 Main St
+ *
+ *      456 Oak Ave 456 Oak Ave
+ *      -> 456 Oak Ave
+ *
+ *   2. Obvious street suffix typos
+ *      Example:
+ *      Steet -> Street
+ *      Aveneu -> Avenue
+ *
+ *   3. Suspicious duplicate Apt/Unit text
+ *      Example:
+ *      Apt 5 Apt 5
+ *      Unit 2 Unit 2
+ *      -> Flag for review
+ *
+ * Requires:
+ *   - Phase 1 completed
+ *   - Phase 2 completed
+ */
+
+type Cell = string | number | boolean;
+
+// ----------------------------------------------------
+// SHEET NAMES
+// ----------------------------------------------------
+
+const BACKUP_SHEET = "Raw Backup";
+const LOG_SHEET = "Changes Log";
+const SUMMARY_SHEET = "Summary";
+
+// ----------------------------------------------------
+// LOG HELPERS
+// ----------------------------------------------------
+
+function logRow(
+    originalRow: Cell,
+    accountId: Cell,
+    column: string,
+    oldValue: Cell,
+    newValue: Cell,
+    rule: string,
+    action: string
+): Cell[] {
+
+    return [
+        originalRow,
+        accountId,
+        column,
+        oldValue,
+        newValue,
+        rule,
+        action,
+        new Date().toISOString()
+    ];
+}
+
+function appendLog(
+    logSheet: ExcelScript.Worksheet,
+    entries: Cell[][]
+): void {
+
+    if (entries.length === 0) {
+        return;
+    }
+
+    const nextRow =
+        logSheet.getUsedRange().getRowCount();
+
+    logSheet
+        .getRangeByIndexes(
+            nextRow,
+            0,
+            entries.length,
+            8
+        )
+        .setValues(entries);
+}
+
+function appendSummary(
+    summarySheet: ExcelScript.Worksheet,
+    rows: Cell[][]
+): void {
+
+    if (rows.length === 0) {
+        return;
+    }
+
+    const nextRow =
+        summarySheet.getUsedRange().getRowCount();
+
+    summarySheet
+        .getRangeByIndexes(
+            nextRow,
+            0,
+            rows.length,
+            2
+        )
+        .setValues(rows);
+}
+
+function colIndex(
+    headers: string[],
+    name: string
+): number {
+
+    const idx = headers.indexOf(name);
+
+    if (idx === -1) {
+        throw new Error(
+            `Column not found: ${name}`
+        );
+    }
+
+    return idx;
+}
+
+// ----------------------------------------------------
+// FLAG HELPER
+// ----------------------------------------------------
+
+function addFlag(
+    row: Cell[],
+    flagCol: number,
+    reasonCol: number,
+    suggestionCol: number,
+    reason: string,
+    suggestion: string
+): void {
+
+    row[flagCol] = "REVIEW";
+
+    const currentReason =
+        String(row[reasonCol] || "");
+
+    row[reasonCol] =
+        currentReason === ""
+            ? reason
+            : currentReason + "; " + reason;
+
+    const currentSuggestion =
+        String(row[suggestionCol] || "");
+
+    row[suggestionCol] =
+        currentSuggestion === ""
+            ? suggestion
+            : currentSuggestion + "; " + suggestion;
+}
+
+// ----------------------------------------------------
+// SUFFIX TYPO FIXES
+// ----------------------------------------------------
+
+function fixSuffixTypos(
+    street: string
+): string {
+
+    let fixed = street;
+
+    const replacements = [
+        ["Steet", "Street"],
+        ["Steet.", "Street"],
+        ["Stret", "Street"],
+        ["Streett", "Street"],
+
+        ["Aveneu", "Avenue"],
+        ["Aveune", "Avenue"],
+        ["Avnue", "Avenue"],
+
+        ["Boulvard", "Boulevard"],
+        ["Boulevrard", "Boulevard"],
+
+        ["Drve", "Drive"],
+
+        ["Courtt", "Court"]
+    ];
+
+    for (let i = 0; i < replacements.length; i++) {
+
+        const from = replacements[i][0];
+        const to = replacements[i][1];
+
+        const regex =
+            new RegExp("\\b" + from + "\\b", "gi");
+
+        fixed = fixed.replace(regex, to);
+    }
+
+    return fixed;
+}
+
+// ----------------------------------------------------
+// DUPLICATE STREET DETECTION
+// ----------------------------------------------------
+
+function removeEntireDuplicateAddress(
+    street: string
+): string | null {
+
+    const words =
+        street.trim().split(/\s+/);
+
+    if (words.length < 4) {
+        return null;
+    }
+
+    if (words.length % 2 !== 0) {
+        return null;
+    }
+
+    const midpoint =
+        words.length / 2;
+
+    const firstHalf =
+        words.slice(0, midpoint).join(" ");
+
+    const secondHalf =
+        words.slice(midpoint).join(" ");
+
+    if (
+        firstHalf.toLowerCase() ===
+        secondHalf.toLowerCase()
+    ) {
+        return firstHalf;
+    }
+
+    return null;
+}
+
+function removeRepeatedEnding(
+    street: string
+): string | null {
+
+    const lower =
+        street.toLowerCase().trim();
+
+    const suffixes = [
+        "street",
+        "st",
+        "avenue",
+        "ave",
+        "road",
+        "rd",
+        "drive",
+        "dr",
+        "lane",
+        "ln",
+        "court",
+        "ct"
+    ];
+
+    for (let i = 0; i < suffixes.length; i++) {
+
+        const suffix = suffixes[i];
+
+        const pattern =
+            new RegExp(
+                `(.*)\\s+([^\\s]+\\s+${suffix})\\s+\\2$`,
+                "i"
+            );
+
+        const match =
+            lower.match(pattern);
+
+        if (match) {
+
+            const originalMatch =
+                street.match(pattern);
+
+            if (originalMatch) {
+
+                return (
+                    originalMatch[1].trim() +
+                    " " +
+                    originalMatch[2].trim()
+                );
+            }
+        }
+    }
+
+    return null;
+}
+
+// ----------------------------------------------------
+// MAIN
+// ----------------------------------------------------
+
+function main(
+    workbook: ExcelScript.Workbook
+) {
+
+    const sheet =
+        workbook.getActiveWorksheet();
+
+    const badSheets = [
+        BACKUP_SHEET,
+        LOG_SHEET,
+        SUMMARY_SHEET,
+        "ZipLookup"
+    ];
+
+    if (
+        badSheets.indexOf(
+            sheet.getName()
+        ) !== -1
+    ) {
+        throw new Error(
+            "Activate your donor data worksheet first."
+        );
+    }
+
+    const log =
+        workbook.getWorksheet(LOG_SHEET);
+
+    const summary =
+        workbook.getWorksheet(SUMMARY_SHEET);
+
+    if (!log || !summary) {
+        throw new Error(
+            "Phase 1 sheets not found."
+        );
+    }
+
+    const used =
+        sheet.getUsedRange();
+
+    if (!used) {
+        throw new Error(
+            "No data found."
+        );
+    }
+
+    const values =
+        used.getValues();
+
+    const headers =
+        values[0].map(v =>
+            String(v).trim()
+        );
+
+    const cStreet =
+        colIndex(headers, "Billing Street");
+
+    const cOrig =
+        colIndex(headers, "Original Row");
+
+    const cId =
+        colIndex(headers, "Account Case Safe ID");
+
+    const cFlag =
+        colIndex(headers, "Flag");
+
+    const cReason =
+        colIndex(headers, "Flag Reason");
+
+    const cSuggest =
+        colIndex(headers, "Suggested Fix");
+
+    const logEntries: Cell[][] = [];
+
+    let duplicateFixes = 0;
+    let typoFixes = 0;
+    let flags = 0;
+
+    for (
+        let r = 1;
+        r < values.length;
+        r++
+    ) {
+
+        const row = values[r];
+
+        const originalRow =
+            row[cOrig];
+
+        const accountId =
+            row[cId];
+
+        let street =
+            String(row[cStreet] || "");
+
+        // --------------------------------
+        // Entire duplicate address
+        // --------------------------------
+
+        const duplicateFull =
+            removeEntireDuplicateAddress(
+                street
+            );
+
+        if (duplicateFull) {
+
+            logEntries.push(
+                logRow(
+                    originalRow,
+                    accountId,
+                    "Billing Street",
+                    street,
+                    duplicateFull,
+                    "Duplicate street text",
+                    "Auto-fixed"
+                )
+            );
+
+            street = duplicateFull;
+
+            duplicateFixes++;
+        }
+
+        // --------------------------------
+        // Repeated ending phrase
+        // --------------------------------
+
+        const endingFix =
+            removeRepeatedEnding(
+                street
+            );
+
+        if (
+            endingFix &&
+            endingFix !== street
+        ) {
+
+            const oldStreet =
+                street;
+
+            street = endingFix;
+
+            duplicateFixes++;
+
+            logEntries.push(
+                logRow(
+                    originalRow,
+                    accountId,
+                    "Billing Street",
+                    oldStreet,
+                    street,
+                    "Duplicate street phrase",
+                    "Auto-fixed"
+                )
+            );
+        }
+
+        // --------------------------------
+        // Suffix typos
+        // --------------------------------
+
+        const typoFixed =
+            fixSuffixTypos(
+                street
+            );
+
+        if (typoFixed !== street) {
+
+            logEntries.push(
+                logRow(
+                    originalRow,
+                    accountId,
+                    "Billing Street",
+                    street,
+                    typoFixed,
+                    "Street suffix typo",
+                    "Auto-fixed"
+                )
+            );
+
+            street = typoFixed;
+
+            typoFixes++;
+        }
+
+        // --------------------------------
+        // Duplicate Apt/Unit text
+        // --------------------------------
+
+        if (
+            /apt\s+\S+.*apt\s+\S+/i.test(street) ||
+            /unit\s+\S+.*unit\s+\S+/i.test(street)
+        ) {
+
+            addFlag(
+                row,
+                cFlag,
+                cReason,
+                cSuggest,
+                "Possible duplicate apartment/unit text",
+                street
+            );
+
+            flags++;
+
+            logEntries.push(
+                logRow(
+                    originalRow,
+                    accountId,
+                    "Billing Street",
+                    street,
+                    street,
+                    "Possible duplicate apartment/unit text",
+                    "Flagged"
+                )
+            );
+        }
+
+        row[cStreet] = street;
+    }
+
+    // ------------------------------------------------
+    // WRITE DATA BACK
+    // ------------------------------------------------
+
+    sheet
+        .getRangeByIndexes(
+            0,
+            0,
+            values.length,
+            values[0].length
+        )
+        .setValues(values);
+
+    appendLog(
+        log,
+        logEntries
+    );
+
+    appendSummary(
+        summary,
+        [
+            [
+                "Phase 3: duplicate street fixes",
+                duplicateFixes
+            ],
+            [
+                "Phase 3: street typo fixes",
+                typoFixes
+            ],
+            [
+                "Phase 3: flagged street issues",
+                flags
+            ]
+        ]
+    );
+
+    console.log(
+        `PHASE 3 COMPLETE
+
+Duplicate street fixes: ${duplicateFixes}
+Street typo fixes: ${typoFixes}
+Flags: ${flags}`
+    );
+}
