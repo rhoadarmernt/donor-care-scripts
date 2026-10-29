@@ -1,0 +1,534 @@
+/**
+ * PHASE 6.4
+ * Greeting Validation & Capitalization
+ */
+
+type Cell = string | number | boolean;
+
+const LOG_SHEET = "Changes Log";
+const SUMMARY_SHEET = "Summary";
+const BACKUP_SHEET = "Raw Backup";
+
+const ORG_KEYWORDS = [
+    "FOUNDATION",
+    "TRUST",
+    "FUND",
+    "CHURCH",
+    "MINISTRY",
+    "INC",
+    "LLC",
+    "ASSOCIATION",
+    "SCHOOL",
+    "UNIVERSITY",
+    "HOSPITAL",
+    "BANK",
+    "CORPORATION",
+    "CORP",
+    "COMPANY",
+    "FAMILY",
+    "BAPTIST",
+    "FELLOWSHIP",
+    "MISSION",
+    "TEMPLE",
+    "SYNAGOGUE",
+    "MOSQUE",
+    "PARISH",
+    "DIOCESE",
+    "CHAPEL"
+];
+
+// ---------------------------------------------------
+// HELPERS
+// ---------------------------------------------------
+
+function colIndex(headers: string[], name: string): number {
+
+    const idx = headers.indexOf(name);
+
+    if (idx === -1) {
+        throw new Error(`Column not found: ${name}`);
+    }
+
+    return idx;
+}
+
+function appendText(existing: string, value: string): string {
+
+    if (!existing) {
+        return value;
+    }
+
+    if (existing.includes(value)) {
+        return existing;
+    }
+
+    return existing + "; " + value;
+}
+
+function normalizeSpaces(value: string): string {
+
+    return value
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function logRow(
+    originalRow: Cell,
+    accountId: Cell,
+    column: string,
+    oldValue: Cell,
+    newValue: Cell,
+    rule: string,
+    action: string
+): Cell[] {
+
+    return [
+        originalRow,
+        accountId,
+        column,
+        oldValue,
+        newValue,
+        rule,
+        action,
+        new Date().toISOString()
+    ];
+}
+
+function appendLog(
+    ws: ExcelScript.Worksheet,
+    rows: Cell[][]
+): void {
+
+    if (rows.length === 0) return;
+
+    const nextRow = ws.getUsedRange().getRowCount();
+
+    ws.getRangeByIndexes(
+        nextRow,
+        0,
+        rows.length,
+        8
+    ).setValues(rows);
+}
+
+function appendSummary(
+    ws: ExcelScript.Worksheet,
+    rows: Cell[][]
+): void {
+
+    if (rows.length === 0) return;
+
+    const nextRow = ws.getUsedRange().getRowCount();
+
+    ws.getRangeByIndexes(
+        nextRow,
+        0,
+        rows.length,
+        2
+    ).setValues(rows);
+}
+
+function removeTitles(formal: string): string {
+
+    return formal.replace(
+        /^(MR|MRS|MS|MISS|DR|REV|HON)\.?\s+/i,
+        ""
+    ).trim();
+}
+
+function isLikelyOrganization(
+    formal: string,
+    accountName: string,
+    type: string
+): boolean {
+
+    const combined =
+        (
+            formal +
+            " " +
+            accountName +
+            " " +
+            type
+        ).toUpperCase();
+
+    return ORG_KEYWORDS.some(
+        keyword => combined.includes(keyword)
+    );
+}
+
+function properNameWord(word: string): string {
+
+    if (!word) return word;
+
+    const lower = word.toLowerCase();
+
+    // McDonald
+    if (/^mc[a-z]/.test(lower)) {
+
+        return (
+            "Mc" +
+            lower.charAt(2).toUpperCase() +
+            lower.substring(3)
+        );
+    }
+
+    // O'Brien
+    if (/^[a-z]'[a-z]/.test(lower)) {
+
+        return (
+            lower.charAt(0).toUpperCase() +
+            "'" +
+            lower.charAt(2).toUpperCase() +
+            lower.substring(3)
+        );
+    }
+
+    return (
+        lower.charAt(0).toUpperCase() +
+        lower.substring(1)
+    );
+}
+
+function properGreeting(value: string): string {
+
+    value = normalizeSpaces(value);
+
+    value = value.replace(/\s*&\s*/g, " and ");
+
+    const words = value.split(" ");
+
+    const output: string[] = [];
+
+    for (const word of words) {
+
+        const lower = word.toLowerCase();
+
+        if (lower === "and") {
+            output.push("and");
+            continue;
+        }
+
+        // Preserve intentional mixed-case names
+        if (
+            word !== word.toUpperCase() &&
+            word !== word.toLowerCase()
+        ) {
+
+            const firstLetterUpper =
+                /^[A-Z]/.test(word);
+
+            const restContainsLower =
+                /[a-z]/.test(word.substring(1));
+
+            if (
+                firstLetterUpper &&
+                restContainsLower
+            ) {
+                output.push(word);
+                continue;
+            }
+        }
+
+        output.push(
+            word
+                .split("-")
+                .map(part => properNameWord(part))
+                .join("-")
+        );
+    }
+
+    return output.join(" ");
+}
+
+function expectedInformal(
+    formal: string
+): string | null {
+
+    formal = normalizeSpaces(
+        removeTitles(formal)
+    );
+
+    if (!formal) {
+        return null;
+    }
+
+    formal = formal.replace(/\s*&\s*/g, " and ");
+    formal = formal.replace(/\s+AND\s+/gi, " and ");
+
+    // Couple
+    if (formal.includes(" and ")) {
+
+        const pieces =
+            formal.split(/\s+and\s+/i);
+
+        if (pieces.length === 2) {
+
+            const firstPerson =
+                pieces[0]
+                    .trim()
+                    .split(" ")[0];
+
+            const secondPerson =
+                pieces[1]
+                    .trim()
+                    .split(" ")[0];
+
+            if (
+                firstPerson &&
+                secondPerson
+            ) {
+
+                return (
+                    firstPerson +
+                    " and " +
+                    secondPerson
+                );
+            }
+        }
+    }
+
+    // Single person
+
+    const parts = formal.split(" ");
+
+    if (parts.length >= 2) {
+        return parts[0];
+    }
+
+    return null;
+}
+
+// ---------------------------------------------------
+// MAIN
+// ---------------------------------------------------
+
+function main(workbook: ExcelScript.Workbook) {
+
+    const sheet =
+        workbook.getActiveWorksheet();
+
+    if (
+        [
+            LOG_SHEET,
+            SUMMARY_SHEET,
+            BACKUP_SHEET,
+            "ZipLookup"
+        ].includes(sheet.getName())
+    ) {
+        throw new Error(
+            "Activate your donor worksheet first."
+        );
+    }
+
+    const logSheet =
+        workbook.getWorksheet(LOG_SHEET);
+
+    const summarySheet =
+        workbook.getWorksheet(SUMMARY_SHEET);
+
+    if (!logSheet || !summarySheet) {
+        throw new Error(
+            "Run Phase 1 first."
+        );
+    }
+
+    const values =
+        sheet.getUsedRange().getValues();
+
+    const headers =
+        values[0].map(v =>
+            String(v).trim()
+        );
+
+    const cOrig =
+        colIndex(headers, "Original Row");
+
+    const cId =
+        colIndex(headers, "Account Case Safe ID");
+
+    const cAccount =
+        colIndex(headers, "Account Name");
+
+    const cType =
+        colIndex(headers, "Type");
+
+    const cFormal =
+        colIndex(headers, "Formal Greeting");
+
+    const cInformal =
+        colIndex(headers, "Informal Greeting");
+
+    const cFlag =
+        colIndex(headers, "Flag");
+
+    const cReason =
+        colIndex(headers, "Flag Reason");
+
+    const cSuggest =
+        colIndex(headers, "Suggested Fix");
+
+    const logs: Cell[][] = [];
+
+    let autoFixes = 0;
+    let mismatches = 0;
+
+    for (let r = 1; r < values.length; r++) {
+
+        const row = values[r];
+
+        let formal =
+            normalizeSpaces(
+                String(row[cFormal] || "")
+            );
+
+        let informal =
+            normalizeSpaces(
+                String(row[cInformal] || "")
+            );
+
+        if (!formal || !informal) {
+            continue;
+        }
+
+        // Skip organizations
+
+        if (
+            isLikelyOrganization(
+                formal,
+                String(row[cAccount] || ""),
+                String(row[cType] || "")
+            )
+        ) {
+            continue;
+        }
+
+        // Always evaluate capitalization
+
+        const fixedFormal =
+            properGreeting(formal);
+
+        if (fixedFormal !== formal) {
+
+            row[cFormal] = fixedFormal;
+
+            logs.push(
+                logRow(
+                    row[cOrig],
+                    row[cId],
+                    "Formal Greeting",
+                    formal,
+                    fixedFormal,
+                    "Greeting capitalization",
+                    "Auto-fixed"
+                )
+            );
+
+            formal = fixedFormal;
+            autoFixes++;
+        }
+
+        const fixedInformal =
+            properGreeting(informal);
+
+        if (fixedInformal !== informal) {
+
+            row[cInformal] = fixedInformal;
+
+            logs.push(
+                logRow(
+                    row[cOrig],
+                    row[cId],
+                    "Informal Greeting",
+                    informal,
+                    fixedInformal,
+                    "Greeting capitalization",
+                    "Auto-fixed"
+                )
+            );
+
+            informal = fixedInformal;
+            autoFixes++;
+        }
+
+        const expected =
+            expectedInformal(formal);
+
+        if (!expected) {
+            continue;
+        }
+
+        if (informal === expected) {
+            continue;
+        }
+
+        if (
+            informal.toLowerCase() ===
+            expected.toLowerCase()
+        ) {
+
+            row[cInformal] = expected;
+
+            logs.push(
+                logRow(
+                    row[cOrig],
+                    row[cId],
+                    "Informal Greeting",
+                    informal,
+                    expected,
+                    "Greeting formatting",
+                    "Auto-fixed"
+                )
+            );
+
+            autoFixes++;
+            continue;
+        }
+
+        row[cFlag] = "REVIEW";
+
+        row[cReason] = appendText(
+            String(row[cReason] || ""),
+            "Greeting mismatch"
+        );
+
+        row[cSuggest] = appendText(
+            String(row[cSuggest] || ""),
+            expected
+        );
+
+        logs.push(
+            logRow(
+                row[cOrig],
+                row[cId],
+                "Informal Greeting",
+                informal,
+                expected,
+                "Greeting mismatch",
+                "Flagged"
+            )
+        );
+
+        mismatches++;
+    }
+
+    sheet.getRangeByIndexes(
+        0,
+        0,
+        values.length,
+        values[0].length
+    ).setValues(values);
+
+    appendLog(logSheet, logs);
+
+    appendSummary(summarySheet, [
+        ["Phase 6.4: Greeting auto-fixes", autoFixes],
+        ["Phase 6.4: Greeting mismatches", mismatches]
+    ]);
+
+    console.log(
+        `PHASE 6.4 COMPLETE
+
+Greeting auto-fixes: ${autoFixes}
+Greeting mismatches: ${mismatches}`
+    );
+}
