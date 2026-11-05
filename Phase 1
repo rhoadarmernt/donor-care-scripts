@@ -1,13 +1,13 @@
 /**
  * PHASE 1 - SETUP & FOUNDATION
- * Mid/Major List Cleanup (Office Scripts)
+ * Mid/Major List Cleanup
  *
- * Run this ONCE, with your data sheet as the active sheet.
+ * Run this ONCE with the donor data worksheet active.
  *
  * What it does:
- *   1. Checks that all expected column headers exist
- *   2. Saves an untouched copy of the data to "Raw Backup"
- *   3. Adds helper columns:
+ *   1. Validates required column headers
+ *   2. Creates an untouched copy named "Raw Backup"
+ *   3. Adds missing helper columns:
  *        - Original Row
  *        - Flag
  *        - Flag Reason
@@ -17,7 +17,7 @@
  *        - Summary
  *        - Deleted Rows
  *
- * It does NOT modify donor data.
+ * It does not modify existing donor data.
  */
 
 type Cell = string | number | boolean;
@@ -66,172 +66,120 @@ const LOG_SHEET = "Changes Log";
 const SUMMARY_SHEET = "Summary";
 const DELETED_SHEET = "Deleted Rows";
 
+const HEADER_COLOR = "#D9E1F2";
+const BACKUP_TAB_COLOR = "#808080";
+const DELETED_TAB_COLOR = "#FF6666";
+
 // --------------------------------------------------
 // HELPERS
 // --------------------------------------------------
 
-function formatTimestamp(): string {
-
-  const d = new Date();
-
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-
-  const hh = String(d.getHours()).padStart(2, "0");
-  const min = String(d.getMinutes()).padStart(2, "0");
+function formatTimestamp(date: Date = new Date()): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
 
   return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
 }
 
-function appendLog(
-  log: ExcelScript.Worksheet,
-  entries: Cell[][]
-): void {
+function styleHeader(range: ExcelScript.Range): void {
+  const format = range.getFormat();
 
-  if (entries.length === 0) {
+  format.getFont().setBold(true);
+  format.getFill().setColor(HEADER_COLOR);
+}
+
+function writeHeader(
+  sheet: ExcelScript.Worksheet,
+  headers: string[]
+): void {
+  const headerRange = sheet.getRangeByIndexes(
+    0,
+    0,
+    1,
+    headers.length
+  );
+
+  headerRange.setValues([headers]);
+  styleHeader(headerRange);
+  sheet.getFreezePanes().freezeRows(1);
+}
+
+function appendRows(
+  sheet: ExcelScript.Worksheet,
+  rows: Cell[][],
+  columnCount: number
+): void {
+  if (rows.length === 0) {
     return;
   }
 
-  const nextRow =
-    log.getUsedRange().getRowCount();
+  const usedRange = sheet.getUsedRange();
+  const nextRow = usedRange ? usedRange.getRowCount() : 0;
 
-  log
+  sheet
     .getRangeByIndexes(
       nextRow,
       0,
-      entries.length,
-      LOG_HEADERS.length
+      rows.length,
+      columnCount
     )
-    .setValues(entries);
-}
-
-function logRow(
-  originalRow: number | string,
-  accountId: Cell,
-  column: string,
-  oldValue: Cell,
-  newValue: Cell,
-  rule: string,
-  action: string
-): Cell[] {
-
-  return [
-    originalRow,
-    accountId,
-    column,
-    oldValue,
-    newValue,
-    rule,
-    action,
-    formatTimestamp()
-  ];
-}
-
-function colIndex(
-  headers: string[],
-  name: string
-): number {
-
-  const idx = headers.indexOf(name);
-
-  if (idx === -1) {
-    throw new Error(
-      `Column not found: "${name}"`
-    );
-  }
-
-  return idx;
-}
-
-function styleHeader(
-  range: ExcelScript.Range
-): void {
-
-  range
-    .getFormat()
-    .getFont()
-    .setBold(true);
-
-  range
-    .getFormat()
-    .getFill()
-    .setColor("#D9E1F2");
+    .setValues(rows);
 }
 
 // --------------------------------------------------
 // MAIN
 // --------------------------------------------------
 
-function main(
-  workbook: ExcelScript.Workbook
-) {
+function main(workbook: ExcelScript.Workbook): void {
+  const dataSheet = workbook.getActiveWorksheet();
+  const usedRange = dataSheet.getUsedRange();
 
-  const dataSheet =
-    workbook.getActiveWorksheet();
-
-  const used =
-    dataSheet.getUsedRange();
-
-  if (!used) {
-
+  if (!usedRange) {
     throw new Error(
-      "The active sheet is empty. Activate your donor data worksheet and run again."
+      "The active sheet is empty. Activate the donor data worksheet and run the script again."
     );
   }
 
-  // Headers must start in A1
-
+  // Headers must begin at A1.
   if (
-    used.getRowIndex() !== 0 ||
-    used.getColumnIndex() !== 0
+    usedRange.getRowIndex() !== 0 ||
+    usedRange.getColumnIndex() !== 0
   ) {
-
     throw new Error(
-      "Headers must start in cell A1 with no blank rows or columns above or to the left."
+      "Headers must begin in cell A1, with no blank rows above them or blank columns to their left."
     );
   }
 
-  // Prevent accidental second run
-
-  if (
-    workbook.getWorksheet(
-      BACKUP_SHEET
-    )
-  ) {
-
+  // Raw Backup is the marker that Phase 1 has already run.
+  if (workbook.getWorksheet(BACKUP_SHEET)) {
     throw new Error(
-      `A sheet named "${BACKUP_SHEET}" already exists. Setup has probably already been run.`
+      `A worksheet named "${BACKUP_SHEET}" already exists. Phase 1 has probably already been run.`
     );
   }
 
-  const values =
-    used.getValues();
+  const values = usedRange.getValues();
+  const rowCount = usedRange.getRowCount();
+  const columnCount = usedRange.getColumnCount();
+  const timestamp = formatTimestamp();
 
-  const rowCount =
-    used.getRowCount();
-
-  const colCount =
-    used.getColumnCount();
-
-  const headers: string[] =
-    values[0].map(
-      h => String(h).trim()
-    );
+  const headers = values[0].map(value =>
+    String(value).trim()
+  );
 
   // --------------------------------------------------
   // VALIDATE REQUIRED HEADERS
   // --------------------------------------------------
 
-  const missing =
-    REQUIRED_HEADERS.filter(
-      h => headers.indexOf(h) === -1
-    );
+  const missingHeaders = REQUIRED_HEADERS.filter(
+    requiredHeader => !headers.includes(requiredHeader)
+  );
 
-  if (missing.length > 0) {
-
+  if (missingHeaders.length > 0) {
     throw new Error(
-      `Missing or misspelled header(s): ${missing.join(", ")}`
+      `Missing or misspelled header(s): ${missingHeaders.join(", ")}`
     );
   }
 
@@ -239,18 +187,14 @@ function main(
   // RAW BACKUP
   // --------------------------------------------------
 
-  const backup =
-    dataSheet.copy(
-      ExcelScript.WorksheetPositionType.end
-    );
-
-  backup.setName(
-    BACKUP_SHEET
+  // This happens before helper columns are added, so the backup
+  // remains an untouched copy of the original data worksheet.
+  const backupSheet = dataSheet.copy(
+    ExcelScript.WorksheetPositionType.end
   );
 
-  backup.setTabColor(
-    "#808080"
-  );
+  backupSheet.setName(BACKUP_SHEET);
+  backupSheet.setTabColor(BACKUP_TAB_COLOR);
 
   dataSheet.activate();
 
@@ -258,153 +202,84 @@ function main(
   // ADD HELPER COLUMNS
   // --------------------------------------------------
 
-  const toAdd =
-    HELPER_HEADERS.filter(
-      h => headers.indexOf(h) === -1
-    );
+  const helpersToAdd = HELPER_HEADERS.filter(
+    helperHeader => !headers.includes(helperHeader)
+  );
 
-  if (toAdd.length > 0) {
-
-    const helperData: Cell[][] = [];
-
-    helperData.push(
-      toAdd.slice()
-    );
-
-    for (
-      let r = 1;
-      r < rowCount;
-      r++
-    ) {
-
-      const row: Cell[] = [];
-
-      for (const h of toAdd) {
-
-        row.push(
-          h === "Original Row"
-            ? r + 1
-            : ""
-        );
-      }
-
-      helperData.push(row);
-    }
-
-    dataSheet
-      .getRangeByIndexes(
-        0,
-        colCount,
-        rowCount,
-        toAdd.length
+  if (helpersToAdd.length > 0) {
+    const helperValues: Cell[][] = [
+      helpersToAdd,
+      ...Array.from(
+        { length: rowCount - 1 },
+        (_, index) =>
+          helpersToAdd.map(header =>
+            header === "Original Row"
+              ? index + 2
+              : ""
+          )
       )
-      .setValues(helperData);
+    ];
+
+    const helperRange = dataSheet.getRangeByIndexes(
+      0,
+      columnCount,
+      rowCount,
+      helpersToAdd.length
+    );
+
+    helperRange.setValues(helperValues);
 
     styleHeader(
       dataSheet.getRangeByIndexes(
         0,
-        colCount,
+        columnCount,
         1,
-        toAdd.length
+        helpersToAdd.length
       )
     );
   }
 
-  dataSheet
-    .getFreezePanes()
-    .freezeRows(1);
+  dataSheet.getFreezePanes().freezeRows(1);
 
   // --------------------------------------------------
   // CHANGES LOG
   // --------------------------------------------------
 
-  let log =
-    workbook.getWorksheet(
-      LOG_SHEET
-    );
+  let logSheet = workbook.getWorksheet(LOG_SHEET);
 
-  if (!log) {
-
-    log =
-      workbook.addWorksheet(
-        LOG_SHEET
-      );
-
-    const logHeader =
-      log.getRangeByIndexes(
-        0,
-        0,
-        1,
-        LOG_HEADERS.length
-      );
-
-    logHeader.setValues([
-      LOG_HEADERS
-    ]);
-
-    styleHeader(
-      logHeader
-    );
-
-    log
-      .getFreezePanes()
-      .freezeRows(1);
+  if (!logSheet) {
+    logSheet = workbook.addWorksheet(LOG_SHEET);
+    writeHeader(logSheet, LOG_HEADERS);
   }
 
-  appendLog(
-    log,
-    [
-      logRow(
-        "-",
-        "-",
-        "-",
-        "-",
-        "-",
-        "Phase 1 setup complete",
-        "Setup"
-      )
-    ]
+  appendRows(
+    logSheet,
+    [[
+      "-",
+      "-",
+      "-",
+      "-",
+      "-",
+      "Phase 1 setup complete",
+      "Setup",
+      timestamp
+    ]],
+    LOG_HEADERS.length
   );
 
   // --------------------------------------------------
   // SUMMARY
   // --------------------------------------------------
 
-  let summary =
-    workbook.getWorksheet(
-      SUMMARY_SHEET
-    );
+  let summarySheet = workbook.getWorksheet(SUMMARY_SHEET);
 
-  if (!summary) {
+  if (!summarySheet) {
+    summarySheet = workbook.addWorksheet(SUMMARY_SHEET);
 
-    summary =
-      workbook.addWorksheet(
-        SUMMARY_SHEET
-      );
+    writeHeader(summarySheet, ["Metric", "Count"]);
 
-    const summaryHeader =
-      summary.getRangeByIndexes(
-        0,
-        0,
-        1,
-        2
-      );
-
-    summaryHeader.setValues([
-      ["Metric", "Count"]
-    ]);
-
-    styleHeader(
-      summaryHeader
-    );
-
-    summary
-      .getRangeByIndexes(
-        1,
-        0,
-        2,
-        2
-      )
+    summarySheet
+      .getRangeByIndexes(1, 0, 2, 2)
       .setValues([
         [
           "Data rows at start (excluding header)",
@@ -412,16 +287,16 @@ function main(
         ],
         [
           "Setup run",
-          formatTimestamp()
+          timestamp
         ]
       ]);
 
-    summary
+    summarySheet
       .getRange("A:A")
       .getFormat()
       .setColumnWidth(260);
 
-    summary
+    summarySheet
       .getRange("B:B")
       .getFormat()
       .setColumnWidth(180);
@@ -431,66 +306,39 @@ function main(
   // DELETED ROWS
   // --------------------------------------------------
 
-  let deleted =
-    workbook.getWorksheet(
-      DELETED_SHEET
+  let deletedSheet = workbook.getWorksheet(DELETED_SHEET);
+
+  if (!deletedSheet) {
+    deletedSheet = workbook.addWorksheet(DELETED_SHEET);
+
+    writeHeader(
+      deletedSheet,
+      [
+        "Deleted Reason",
+        "Deleted Timestamp",
+        ...headers
+      ]
     );
 
-  if (!deleted) {
-
-    deleted =
-      workbook.addWorksheet(
-        DELETED_SHEET
-      );
-
-    const deletedHeaders = [
-      "Deleted Reason",
-      "Deleted Timestamp",
-      ...headers
-    ];
-
-    const deletedHeaderRange =
-      deleted.getRangeByIndexes(
-        0,
-        0,
-        1,
-        deletedHeaders.length
-      );
-
-    deletedHeaderRange.setValues([
-      deletedHeaders
-    ]);
-
-    styleHeader(
-      deletedHeaderRange
-    );
-
-    deleted
-      .getFreezePanes()
-      .freezeRows(1);
-
-    deleted.setTabColor(
-      "#FF6666"
-    );
+    deletedSheet.setTabColor(DELETED_TAB_COLOR);
   }
 
   // --------------------------------------------------
-  // COSMETICS
+  // COSMETIC FORMATTING
   // --------------------------------------------------
 
   try {
-
     dataSheet
       .getRangeByIndexes(
         0,
         0,
         1,
-        colCount + toAdd.length
+        columnCount + helpersToAdd.length
       )
       .getFormat()
       .autofitColumns();
 
-    log
+    logSheet
       .getRangeByIndexes(
         0,
         0,
@@ -499,13 +347,18 @@ function main(
       )
       .getFormat()
       .autofitColumns();
-
   } catch {
-
-    console.log(
-      "Skipped autofit (cosmetic only)."
-    );
+    console.log("Skipped autofit. This does not affect the data.");
   }
+
+  // --------------------------------------------------
+  // COMPLETION MESSAGE
+  // --------------------------------------------------
+
+  const helperMessage =
+    helpersToAdd.length > 0
+      ? helpersToAdd.join(", ")
+      : "None (already present)";
 
   console.log(
     `PHASE 1 COMPLETE
@@ -516,11 +369,9 @@ Backup created:
 ${BACKUP_SHEET}
 
 Helper columns added:
-${toAdd.length > 0
-      ? toAdd.join(", ")
-      : "None (already present)"}
+${helperMessage}
 
-Additional sheets created:
+Additional sheets prepared:
 ${LOG_SHEET}
 ${SUMMARY_SHEET}
 ${DELETED_SHEET}`
