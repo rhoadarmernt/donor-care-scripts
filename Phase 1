@@ -7,15 +7,21 @@
  * What it does:
  *   1. Validates required column headers
  *   2. Creates an untouched copy named "Raw Backup"
- *   3. Adds missing helper columns:
- *        - Original Row
- *        - Flag
- *        - Flag Reason
- *        - Suggested Fix
- *   4. Creates a "Blank Addresses" sheet for rows removed
- *      because Billing Street is empty
+ *   3. Adds one helper column: Original Row (each row's position in
+ *      the original data, so later phases can trace rows back)
+ *   4. Fills in blank greetings from the Account Name:
+ *        - Blank Formal Greeting   -> copied from Account Name
+ *        - Blank Informal Greeting -> the Formal Greeting without its
+ *          last name ("John Smith" -> "John",
+ *          "Matthew and Patricia Jones" -> "Matthew and Patricia")
+ *      If the name doesn't look like a person (LLC, Trust, Household,
+ *      Family, etc.) the Informal Greeting is the full name instead.
+ *      Greetings that already have a value are never changed.
+ *   5. Creates a "Blank Addresses" sheet for rows removed later
+ *      (Phase 2) because Billing Street is empty
  *
- * It does not modify existing donor data.
+ * Original Row numbers match each row's position in Raw Backup.
+ * No rows are moved or deleted in this phase.
  */
 
 type Cell = string | number | boolean;
@@ -42,18 +48,29 @@ const REQUIRED_HEADERS: string[] = [
 ];
 
 const HELPER_HEADERS: string[] = [
-  "Original Row",
-  "Flag",
-  "Flag Reason",
-  "Suggested Fix"
+  "Original Row"
 ];
 
 const BACKUP_SHEET = "Raw Backup";
 const BLANK_ADDRESSES_SHEET = "Blank Addresses";
 
+// Ignored when working out the last name (John Smith Jr. -> Smith).
+const NAME_SUFFIXES: string[] = [
+  "JR", "SR", "II", "III", "IV", "MD", "PHD", "ESQ"
+];
+
+// If the last word is one of these, the name isn't a person's, so
+// the Informal Greeting is the full name rather than "first names".
+const NON_PERSON_WORDS: string[] = [
+  "LLC", "INC", "CORP", "LLP", "LP", "TRUST", "FOUNDATION",
+  "ESTATE", "COMPANY", "FAMILY", "HOUSEHOLD", "FUND"
+];
+
 const HEADER_COLOR = "#D9E1F2";
 const BACKUP_TAB_COLOR = "#808080";
 const BLANK_ADDRESSES_TAB_COLOR = "#FF6666";
+
+const CHUNK_SIZE = 500;
 
 // --------------------------------------------------
 // HELPERS
@@ -80,6 +97,82 @@ function writeHeader(
   headerRange.setValues([headers]);
   styleHeader(headerRange);
   sheet.getFreezePanes().freezeRows(1);
+}
+
+function cleanText(value: Cell): string {
+  return String(value ?? "")
+    .replace(/[\u200B\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isBlank(value: Cell): boolean {
+  return cleanText(value) === "";
+}
+
+function stripPunctuation(word: string): string {
+  return word.replace(/[.,;:]+$/g, "");
+}
+
+/**
+ * "John Smith" -> "John"
+ * "Matthew and Patricia Jones" -> "Matthew and Patricia"
+ * "Acme LLC" / "Smith Household" -> unchanged (not a person's name)
+ */
+function deriveInformalGreeting(formal: string): string {
+  const full = cleanText(formal);
+  const words = full.split(" ");
+
+  // Drop suffixes like Jr. or III before finding the last name.
+  while (
+    words.length > 1 &&
+    NAME_SUFFIXES.includes(
+      stripPunctuation(words[words.length - 1]).toUpperCase()
+    )
+  ) {
+    words.pop();
+  }
+
+  if (words.length < 2) {
+    return full;
+  }
+
+  const lastWord = stripPunctuation(
+    words[words.length - 1]
+  ).toUpperCase();
+
+  if (NON_PERSON_WORDS.includes(lastWord)) {
+    return full;
+  }
+
+  words.pop();
+
+  return words.join(" ");
+}
+
+function writeRowsInChunks(
+  sheet: ExcelScript.Worksheet,
+  startRow: number,
+  startColumn: number,
+  rows: Cell[][],
+  columnCount: number
+): void {
+  for (let offset = 0; offset < rows.length; offset += CHUNK_SIZE) {
+    const chunk = rows.slice(offset, offset + CHUNK_SIZE);
+
+    sheet
+      .getRangeByIndexes(
+        startRow + offset,
+        startColumn,
+        chunk.length,
+        columnCount
+      )
+      .setValues(chunk);
+
+    // Reading a value forces Excel to process this chunk now,
+    // so the writes don't pile up into one oversized request.
+    sheet.getRange("A1").getValue();
+  }
 }
 
 // --------------------------------------------------
@@ -113,7 +206,7 @@ function main(workbook: ExcelScript.Workbook): void {
     );
   }
 
-  const values = usedRange.getValues();
+  const values = usedRange.getValues() as Cell[][];
   const rowCount = usedRange.getRowCount();
   const columnCount = usedRange.getColumnCount();
 
@@ -139,8 +232,9 @@ function main(workbook: ExcelScript.Workbook): void {
   // RAW BACKUP
   // --------------------------------------------------
 
-  // This happens before helper columns are added, so the backup
-  // remains an untouched copy of the original data worksheet.
+  // This happens before anything is changed, so the backup remains
+  // an untouched copy of the original data worksheet (including any
+  // blank greetings).
   const backupSheet = dataSheet.copy(
     ExcelScript.WorksheetPositionType.end
   );
@@ -151,63 +245,106 @@ function main(workbook: ExcelScript.Workbook): void {
   dataSheet.activate();
 
   // --------------------------------------------------
-  // ADD HELPER COLUMNS
+  // ADD HELPER COLUMN (Original Row)
   // --------------------------------------------------
 
+  // Header = row 1, so the first data row is 2.
+  // These match Raw Backup positions.
   const helpersToAdd = HELPER_HEADERS.filter(
     helperHeader => !headers.includes(helperHeader)
   );
 
   if (helpersToAdd.length > 0) {
-    const helperValues: Cell[][] = [
-      helpersToAdd,
-      ...Array.from(
-        { length: rowCount - 1 },
-        (_, index) =>
-          helpersToAdd.map(header =>
-            header === "Original Row"
-              ? index + 2
-              : ""
-          )
-      )
-    ];
-
-    const helperRange = dataSheet.getRangeByIndexes(
-      0,
-      columnCount,
-      rowCount,
-      helpersToAdd.length
+    writeHeader(
+      dataSheet,
+      [...headers, ...helpersToAdd]
     );
 
-    helperRange.setValues(helperValues);
+    const helperValues: Cell[][] = Array.from(
+      { length: rowCount - 1 },
+      (_, index) => [index + 2]
+    );
 
-    styleHeader(
-      dataSheet.getRangeByIndexes(
-        0,
-        columnCount,
-        1,
-        helpersToAdd.length
-      )
+    writeRowsInChunks(
+      dataSheet,
+      1,
+      columnCount,
+      helperValues,
+      helpersToAdd.length
     );
   }
 
-  dataSheet.getFreezePanes().freezeRows(1);
-
   // --------------------------------------------------
-  // BLANK ADDRESSES
+  // FILL BLANK GREETINGS FROM ACCOUNT NAME
   // --------------------------------------------------
 
-  let blankSheet = workbook.getWorksheet(BLANK_ADDRESSES_SHEET);
+  const cAccount = headers.indexOf("Account Name");
+  const cFormal = headers.indexOf("Formal Greeting");
+  const cInformal = headers.indexOf("Informal Greeting");
 
-  if (!blankSheet) {
-    blankSheet = workbook.addWorksheet(BLANK_ADDRESSES_SHEET);
+  const formalColumn: Cell[][] = [];
+  const informalColumn: Cell[][] = [];
+
+  let formalFilled = 0;
+  let informalFilled = 0;
+  let rowsStillBlank = 0;
+
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+
+    let formal = row[cFormal];
+    let informal = row[cInformal];
+
+    // Blank Formal Greeting -> copy the Account Name
+    if (isBlank(formal) && !isBlank(row[cAccount])) {
+      formal = cleanText(row[cAccount]);
+      formalFilled++;
+    }
+
+    // Blank Informal Greeting -> derive from the Formal Greeting
+    if (isBlank(informal) && !isBlank(formal)) {
+      informal = deriveInformalGreeting(String(formal));
+      informalFilled++;
+    }
+
+    formalColumn.push([formal]);
+    informalColumn.push([informal]);
+
+    if (
+      isBlank(row[cAccount]) ||
+      isBlank(formal) ||
+      isBlank(informal)
+    ) {
+      rowsStillBlank++;
+    }
+  }
+
+  // Only write a column if something in it changed.
+  if (formalFilled > 0) {
+    writeRowsInChunks(dataSheet, 1, cFormal, formalColumn, 1);
+  }
+
+  if (informalFilled > 0) {
+    writeRowsInChunks(dataSheet, 1, cInformal, informalColumn, 1);
+  }
+
+  // --------------------------------------------------
+  // BLANK ADDRESSES (empty sheet, filled by Phase 2)
+  // --------------------------------------------------
+
+  let blankAddressesSheet = workbook.getWorksheet(BLANK_ADDRESSES_SHEET);
+
+  if (!blankAddressesSheet) {
+    blankAddressesSheet = workbook.addWorksheet(BLANK_ADDRESSES_SHEET);
 
     // Same headers as the donor data sheet, in the same order,
     // so removed rows can be pasted in as-is.
-    writeHeader(blankSheet, headers);
+    writeHeader(blankAddressesSheet, headers);
 
-    blankSheet.setTabColor(BLANK_ADDRESSES_TAB_COLOR);
+    blankAddressesSheet.setTabColor(BLANK_ADDRESSES_TAB_COLOR);
   }
+
+  dataSheet.getFreezePanes().freezeRows(1);
 
   // --------------------------------------------------
   // COSMETIC FORMATTING
@@ -244,8 +381,12 @@ Rows found: ${rowCount - 1}
 Backup created:
 ${BACKUP_SHEET}
 
-Helper columns added:
+Helper column added:
 ${helperMessage}
+
+Blank Formal Greetings filled: ${formalFilled}
+Blank Informal Greetings filled: ${informalFilled}
+Rows still missing a name or greeting: ${rowsStillBlank}
 
 Additional sheet prepared:
 ${BLANK_ADDRESSES_SHEET}`
