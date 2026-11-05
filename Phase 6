@@ -1,41 +1,122 @@
 /**
- * PHASE 6 - GREETING CAPITALIZATION
+ * PHASE 6 - GREETING CAPITALIZATION REVIEW
  *
- * Standardizes capitalization and spacing in:
- * - Formal Greeting
- * - Informal Greeting
+ * Run this ONCE after Phase 5, with the donor data worksheet active.
  *
- * No greetings are compared.
- * No records are flagged.
+ * Moves every row whose Formal Greeting or Informal Greeting would
+ * need its capitalization changed to a "Greeting Capitalization" tab.
+ * No greetings are changed and no greetings are compared.
+ *
+ * Capitalization rules used to decide what "needs changing":
+ *   - Names are Title Case (MARY-ANNE -> Mary-Anne)
+ *   - "and", "of", and "the" are lowercase (except as the first word)
+ *   - McDonald / O'Brien style names are handled
+ *   - Intentional mixed case is left alone (MacArthur, DeMarco, LaToya)
+ *   - Words in ALWAYS_UPPERCASE stay uppercase (LLC, II, III, IV...)
+ *   - Initials stay capitalized (J, J., J.R.)
+ *
+ * Only the main donor data sheet is checked. Rows already moved to
+ * other review tabs are left where they are, so they keep their
+ * original category.
+ *
+ * Moved rows keep the original columns only (same layout as the
+ * Blank Addresses sheet).
  */
 
 type Cell = string | number | boolean;
 
-const LOG_SHEET = "Changes Log";
-const SUMMARY_SHEET = "Summary";
+// --------------------------------------------------
+// SETTINGS
+// --------------------------------------------------
+
 const BACKUP_SHEET = "Raw Backup";
+const BLANK_ADDRESSES_SHEET = "Blank Addresses";
+const ONE_WORD_SHEET = "One Word Address";
+const CITY_IN_ADDRESS_SHEET = "City in Address";
+const APT_UNIT_SHEET = "Apt-Unit Duplicated";
+const NON_ZIP4_SHEET = "Non-Zip+4 Addresses";
+const FOUNDATION_ESTATE_SHEET = "Foundation or Estate";
+const TRUST_SHEET = "Trust";
+const CAPITALIZATION_SHEET = "Greeting Capitalization";
 
-//--------------------------------------------------
+// Words that must always be fully uppercase (compared without
+// punctuation, so "LLC," and "L.L.C." are both covered).
+const ALWAYS_UPPERCASE: string[] = [
+  "LLC",
+  "II",
+  "III",
+  "IV",
+  "V",
+  "VI",
+  "VII",
+  "VIII",
+  "IX",
+  "X"
+];
+
+// Small words that stay lowercase unless they are the first word.
+const LOWERCASE_WORDS: string[] = ["and", "of", "the", "del"];
+
+const HEADER_COLOR = "#D9E1F2";
+const CAPITALIZATION_TAB_COLOR = "#2E9E9E";
+
+// --------------------------------------------------
 // HELPERS
-//--------------------------------------------------
+// --------------------------------------------------
 
-function getColumnIndex(
-  headers: string[],
-  columnName: string
-): number {
-  const index = headers.indexOf(columnName);
+function colIndex(headers: string[], name: string): number {
+  const idx = headers.indexOf(name);
 
-  if (index === -1) {
-    throw new Error(`Column not found: ${columnName}`);
+  if (idx === -1) {
+    throw new Error(`Column not found: "${name}"`);
   }
 
-  return index;
+  return idx;
+}
+
+function getOrCreateReviewSheet(
+  workbook: ExcelScript.Workbook,
+  name: string,
+  headers: string[],
+  tabColor: string
+): ExcelScript.Worksheet {
+  let sheet = workbook.getWorksheet(name);
+
+  if (!sheet) {
+    sheet = workbook.addWorksheet(name);
+
+    const headerRange = sheet.getRangeByIndexes(0, 0, 1, headers.length);
+
+    headerRange.setValues([headers]);
+    headerRange.getFormat().getFont().setBold(true);
+    headerRange.getFormat().getFill().setColor(HEADER_COLOR);
+
+    sheet.getFreezePanes().freezeRows(1);
+    sheet.setTabColor(tabColor);
+  }
+
+  return sheet;
+}
+
+function appendRows(
+  sheet: ExcelScript.Worksheet,
+  rows: Cell[][],
+  columnCount: number
+): void {
+  if (rows.length === 0) {
+    return;
+  }
+
+  const used = sheet.getUsedRange();
+  const nextRow = used ? used.getRowCount() : 1;
+
+  sheet
+    .getRangeByIndexes(nextRow, 0, rows.length, columnCount)
+    .setValues(rows);
 }
 
 function normalizeSpaces(value: string): string {
-  return value
-    .replace(/\s+/g, " ")
-    .trim();
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function capitalizeNamePart(part: string): string {
@@ -64,282 +145,194 @@ function capitalizeNamePart(part: string): string {
     );
   }
 
-  return (
-    lower.charAt(0).toUpperCase() +
-    lower.substring(1)
-  );
+  return lower.charAt(0).toUpperCase() + lower.substring(1);
 }
 
+/**
+ * Initials: a single letter ("J") or letters each followed by a
+ * period ("J.", "J.R.", "L.L.C.").
+ */
+function isInitials(word: string): boolean {
+  return /^([A-Za-z]\.)+$/.test(word) || /^[A-Za-z]$/.test(word);
+}
+
+function isAlwaysUppercase(word: string): boolean {
+  const bare = word.replace(/[^A-Za-z]/g, "").toUpperCase();
+
+  return bare !== "" && ALWAYS_UPPERCASE.indexOf(bare) !== -1;
+}
+
+/**
+ * Returns the greeting as it should be capitalized.
+ * Spacing is normalized; nothing else (like "&") is rewritten.
+ */
 function capitalizeGreeting(value: string): string {
-  const normalized = normalizeSpaces(value)
-    .replace(/\s*&\s*/g, " and ");
+  const normalized = normalizeSpaces(value);
 
   if (!normalized) {
     return "";
   }
 
-  const words = normalized.split(" ");
   const output: string[] = [];
+  const words = normalized.split(" ");
 
-  for (const word of words) {
-    const lower = word.toLowerCase();
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
 
-    if (lower === "and") {
-      output.push("and");
+    // and / of / the stay lowercase, except as the first word
+    if (i > 0 && LOWERCASE_WORDS.indexOf(word.toLowerCase()) !== -1) {
+      output.push(word.toLowerCase());
       continue;
     }
 
-    /*
-     * Preserve intentional mixed capitalization when:
-     * - The first character is uppercase.
-     * - At least one later character is lowercase.
-     *
-     * Examples:
-     * MacArthur
-     * DeMarco
-     * LaToya
-     */
+    // LLC, III, etc. stay uppercase
+    if (isAlwaysUppercase(word)) {
+      output.push(word.toUpperCase());
+      continue;
+    }
+
+    // Initials stay (or become) uppercase
+    if (isInitials(word)) {
+      output.push(word.toUpperCase());
+      continue;
+    }
+
+    // Preserve intentional mixed capitalization (MacArthur, LaToya)
     const isMixedCase =
       word !== word.toUpperCase() &&
       word !== word.toLowerCase();
 
     const beginsWithUppercase = /^[A-Z]/.test(word);
-    const restContainsLowercase = /[a-z]/.test(
-      word.substring(1)
-    );
+    const restContainsLowercase = /[a-z]/.test(word.substring(1));
 
-    if (
-      isMixedCase &&
-      beginsWithUppercase &&
-      restContainsLowercase
-    ) {
+    if (isMixedCase && beginsWithUppercase && restContainsLowercase) {
       output.push(word);
       continue;
     }
 
-    /*
-     * Capitalize each part of a hyphenated name.
-     *
-     * Example:
-     * MARY-ANNE -> Mary-Anne
-     */
-    const correctedWord = word
-      .split("-")
-      .map(part => capitalizeNamePart(part))
-      .join("-");
-
-    output.push(correctedWord);
+    // Capitalize each part of a hyphenated name
+    output.push(
+      word
+        .split("-")
+        .map(part => capitalizeNamePart(part))
+        .join("-")
+    );
   }
 
   return output.join(" ");
 }
 
-function appendRows(
-  sheet: ExcelScript.Worksheet,
-  rows: Cell[][]
-): void {
-  if (rows.length === 0) {
-    return;
+function needsCapitalizationFix(value: string): boolean {
+  const trimmed = normalizeSpaces(value);
+
+  if (trimmed === "") {
+    return false;
   }
 
-  const nextRow =
-    sheet.getUsedRange()?.getRowCount() ?? 0;
-
-  sheet
-    .getRangeByIndexes(
-      nextRow,
-      0,
-      rows.length,
-      rows[0].length
-    )
-    .setValues(rows);
+  return capitalizeGreeting(value) !== trimmed;
 }
 
-//--------------------------------------------------
+// --------------------------------------------------
 // MAIN
-//--------------------------------------------------
+// --------------------------------------------------
 
 function main(workbook: ExcelScript.Workbook): void {
-  const sheet = workbook.getActiveWorksheet();
+  const dataSheet = workbook.getActiveWorksheet();
+  const sheetName = dataSheet.getName();
 
-  const excludedSheets = [
-    LOG_SHEET,
-    SUMMARY_SHEET,
-    BACKUP_SHEET,
-    "ZipLookup"
-  ];
-
-  if (excludedSheets.includes(sheet.getName())) {
-    throw new Error(
-      "Activate your donor data worksheet first."
-    );
+  if (
+    [
+      BACKUP_SHEET,
+      BLANK_ADDRESSES_SHEET,
+      ONE_WORD_SHEET,
+      CITY_IN_ADDRESS_SHEET,
+      APT_UNIT_SHEET,
+      NON_ZIP4_SHEET,
+      FOUNDATION_ESTATE_SHEET,
+      TRUST_SHEET,
+      CAPITALIZATION_SHEET
+    ].includes(sheetName)
+  ) {
+    throw new Error("Activate the donor data sheet first.");
   }
 
-  const logSheet = workbook.getWorksheet(LOG_SHEET);
-  const summarySheet = workbook.getWorksheet(SUMMARY_SHEET);
-
-  if (!logSheet || !summarySheet) {
+  if (!workbook.getWorksheet(BACKUP_SHEET)) {
     throw new Error("Run Phase 1 first.");
   }
 
-  const usedRange = sheet.getUsedRange();
+  const used = dataSheet.getUsedRange();
 
-  if (!usedRange) {
+  if (!used) {
     throw new Error("No data found.");
   }
 
-  const values = usedRange.getValues();
+  const values = used.getValues() as Cell[][];
 
   if (values.length < 2) {
-    throw new Error("No donor records found.");
+    throw new Error("The sheet needs headers and at least one data row.");
   }
 
-  const headers = values[0].map(value =>
-    String(value).trim()
-  );
+  const headers = values[0].map(v => String(v).trim());
 
-  const cOriginalRow = getColumnIndex(
-    headers,
-    "Original Row"
-  );
+  // Phase 1 adds helper columns after the original data columns,
+  // so everything left of "Original Row" is the original record.
+  const originalColumnCount = colIndex(headers, "Original Row");
+  const originalHeaders = headers.slice(0, originalColumnCount);
 
-  const cAccountId = getColumnIndex(
-    headers,
-    "Account Case Safe ID"
-  );
+  const cFormal = colIndex(headers, "Formal Greeting");
+  const cInformal = colIndex(headers, "Informal Greeting");
 
-  const cFormal = getColumnIndex(
-    headers,
-    "Formal Greeting"
-  );
+  const kept: Cell[][] = [];
+  const flaggedRows: Cell[][] = [];
 
-  const cInformal = getColumnIndex(
-    headers,
-    "Informal Greeting"
-  );
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
 
-  const formalValues: Cell[][] = [];
-  const informalValues: Cell[][] = [];
-  const logRows: Cell[][] = [];
+    const formal = String(row[cFormal] ?? "");
+    const informal = String(row[cInformal] ?? "");
 
-  const timestamp = new Date().toISOString();
-
-  let formalFixes = 0;
-  let informalFixes = 0;
-
-  for (
-    let rowIndex = 1;
-    rowIndex < values.length;
-    rowIndex++
-  ) {
-    const row = values[rowIndex];
-
-    const originalFormal = String(
-      row[cFormal] ?? ""
-    );
-
-    const originalInformal = String(
-      row[cInformal] ?? ""
-    );
-
-    let finalFormal = originalFormal;
-    let finalInformal = originalInformal;
-
-    //--------------------------------------------------
-    // FORMAL GREETING
-    //--------------------------------------------------
-
-    if (originalFormal.trim()) {
-      finalFormal = capitalizeGreeting(originalFormal);
-
-      if (finalFormal !== originalFormal) {
-        logRows.push([
-          row[cOriginalRow],
-          row[cAccountId],
-          "Formal Greeting",
-          originalFormal,
-          finalFormal,
-          "Greeting capitalization",
-          "Auto-fixed",
-          timestamp
-        ]);
-
-        formalFixes++;
-      }
+    if (
+      needsCapitalizationFix(formal) ||
+      needsCapitalizationFix(informal)
+    ) {
+      flaggedRows.push(row.slice(0, originalColumnCount));
+    } else {
+      kept.push(row);
     }
-
-    //--------------------------------------------------
-    // INFORMAL GREETING
-    //--------------------------------------------------
-
-    if (originalInformal.trim()) {
-      finalInformal = capitalizeGreeting(
-        originalInformal
-      );
-
-      if (finalInformal !== originalInformal) {
-        logRows.push([
-          row[cOriginalRow],
-          row[cAccountId],
-          "Informal Greeting",
-          originalInformal,
-          finalInformal,
-          "Greeting capitalization",
-          "Auto-fixed",
-          timestamp
-        ]);
-
-        informalFixes++;
-      }
-    }
-
-    formalValues.push([finalFormal]);
-    informalValues.push([finalInformal]);
   }
 
-  const recordCount = values.length - 1;
+  // ----------------------------------
+  // CREATE REVIEW TAB AND MOVE ROWS
+  // ----------------------------------
 
-  // Write only the columns modified by this phase.
-  sheet
-    .getRangeByIndexes(
-      1,
-      cFormal,
-      recordCount,
-      1
-    )
-    .setValues(formalValues);
+  const capitalizationSheet = getOrCreateReviewSheet(
+    workbook,
+    CAPITALIZATION_SHEET,
+    originalHeaders,
+    CAPITALIZATION_TAB_COLOR
+  );
 
-  sheet
-    .getRangeByIndexes(
-      1,
-      cInformal,
-      recordCount,
-      1
-    )
-    .setValues(informalValues);
+  appendRows(capitalizationSheet, flaggedRows, originalColumnCount);
 
-  appendRows(logSheet, logRows);
+  // ----------------------------------
+  // REWRITE DATA SHEET (only if rows moved)
+  // ----------------------------------
 
-  appendRows(summarySheet, [
-    [
-      "Phase 6: Formal Greeting capitalization fixes",
-      formalFixes
-    ],
-    [
-      "Phase 6: Informal Greeting capitalization fixes",
-      informalFixes
-    ],
-    [
-      "Phase 6: Total greeting capitalization fixes",
-      formalFixes + informalFixes
-    ]
-  ]);
+  if (flaggedRows.length > 0) {
+    // Clear contents only, so header styling and number formats stay.
+    used.clear(ExcelScript.ClearApplyTo.contents);
+
+    const rebuilt: Cell[][] = [headers, ...kept];
+
+    dataSheet
+      .getRangeByIndexes(0, 0, rebuilt.length, headers.length)
+      .setValues(rebuilt);
+  }
 
   console.log(
-    `PHASE 6 COMPLETE\n\n` +
-    `Formal Greeting fixes: ${formalFixes}\n` +
-    `Informal Greeting fixes: ${informalFixes}\n` +
-    `Total greeting fixes: ${formalFixes + informalFixes
-    }`
+    `PHASE 6 COMPLETE
+
+Rows moved to ${CAPITALIZATION_SHEET}: ${flaggedRows.length}
+Remaining rows: ${kept.length}`
   );
 }
