@@ -1,119 +1,140 @@
 /**
- * PHASE 8 - DUPLICATE DETECTION
+ * PHASE 8 - DUPLICATE ADDRESSES & HOUSEHOLD MERGE
  *
- * Auto Deletes:
- *   - Exact duplicate rows
+ * Run this ONCE after Phase 7, with the donor data worksheet active.
  *
- * Flags:
- *   - Shared Billing Street
- *   - Shared Primary Household ID
+ * What it does:
+ *   1. Finds rows that share the same address (normalized Billing
+ *      Street + 5-digit ZIP, or + city when there is no ZIP)
+ *   2. Moves all of those rows to a "Duplicate Addresses" tab
+ *   3. Within each shared address, accounts with the same last name
+ *      (last word of Formal Greeting) are merged into ONE row whose
+ *      Account Name, Formal Greeting, and Informal Greeting are all
+ *      "[Last Name] Household"
+ *   4. Accounts at the same address with different last names stay as
+ *      separate rows, next to each other
  *
- * Requires Phase 1.
+ * Merged row details:
+ *   - The surviving row is the one with the most recent Last Activity
+ *     (ties go to the earlier row). All other columns come from it.
+ *   - The extra "Merged From (Original Rows)" column lists the
+ *     Original Row numbers that were combined (look them up in
+ *     Raw Backup).
+ *
+ * Last names are never merged when the last word is in
+ * SKIP_LAST_WORDS (LLC, Trust, Foundation, Family, etc.); those rows
+ * stay unmerged for manual review.
+ *
+ * Moved rows keep the original columns only, plus the extra column.
  */
 
 type Cell = string | number | boolean;
 
-const LOG_SHEET = "Changes Log";
-const SUMMARY_SHEET = "Summary";
+// --------------------------------------------------
+// SETTINGS
+// --------------------------------------------------
+
 const BACKUP_SHEET = "Raw Backup";
+const BLANK_ADDRESSES_SHEET = "Blank Addresses";
+const ONE_WORD_SHEET = "One Word Address";
+const CITY_IN_ADDRESS_SHEET = "City in Address";
+const APT_UNIT_SHEET = "Apt-Unit Duplicated";
+const NON_ZIP4_SHEET = "Non-Zip+4 Addresses";
+const FOUNDATION_ESTATE_SHEET = "Foundation or Estate";
+const TRUST_SHEET = "Trust";
+const CAPITALIZATION_SHEET = "Greeting Capitalization";
+const DUPLICATE_ADDRESSES_SHEET = "Duplicate Addresses";
+
+const MERGED_FROM_HEADER = "Merged From (Original Rows)";
+
+/**
+ * When every account being merged has the exact same Formal Greeting
+ * (for example two identical "John Smith" records), it is most likely
+ * one person imported twice, not a household. If true, those rows are
+ * merged into one but keep their existing names. Set to false to turn
+ * them into "[Last Name] Household" like everything else.
+ */
+const IDENTICAL_NAMES_STAY_AS_IS = true;
+
+// Ignored when finding the last name (John Smith Jr. -> Smith).
+const NAME_SUFFIXES: string[] = [
+  "JR", "SR", "II", "III", "IV", "MD", "PHD", "ESQ"
+];
+
+// If the last word is one of these, it is not a person's last name,
+// so the row is never merged.
+const SKIP_LAST_WORDS: string[] = [
+  "LLC", "INC", "CORP", "LLP", "LP", "TRUST", "FOUNDATION",
+  "ESTATE", "COMPANY", "FAMILY", "HOUSEHOLD", "FUND"
+];
+
+const HEADER_COLOR = "#D9E1F2";
+const DUPLICATES_TAB_COLOR = "#C00000";
 
 // --------------------------------------------------
 // HELPERS
 // --------------------------------------------------
 
 function colIndex(headers: string[], name: string): number {
-
   const idx = headers.indexOf(name);
 
   if (idx === -1) {
-    throw new Error(`Column not found: ${name}`);
+    throw new Error(`Column not found: "${name}"`);
   }
 
   return idx;
 }
 
-function appendText(existing: string, value: string): string {
+function getOrCreateReviewSheet(
+  workbook: ExcelScript.Workbook,
+  name: string,
+  headers: string[],
+  tabColor: string
+): ExcelScript.Worksheet {
+  let sheet = workbook.getWorksheet(name);
 
-  if (!existing) {
-    return value;
+  if (!sheet) {
+    sheet = workbook.addWorksheet(name);
+
+    const headerRange = sheet.getRangeByIndexes(0, 0, 1, headers.length);
+
+    headerRange.setValues([headers]);
+    headerRange.getFormat().getFont().setBold(true);
+    headerRange.getFormat().getFill().setColor(HEADER_COLOR);
+
+    sheet.getFreezePanes().freezeRows(1);
+    sheet.setTabColor(tabColor);
   }
 
-  if (existing.includes(value)) {
-    return existing;
-  }
-
-  return existing + "; " + value;
+  return sheet;
 }
 
-function logRow(
-  originalRow: Cell,
-  accountId: Cell,
-  column: string,
-  oldValue: Cell,
-  newValue: Cell,
-  rule: string,
-  action: string
-): Cell[] {
-
-  return [
-    originalRow,
-    accountId,
-    column,
-    oldValue,
-    newValue,
-    rule,
-    action,
-    new Date().toISOString()
-  ];
-}
-
-function appendLog(
+function appendRows(
   sheet: ExcelScript.Worksheet,
-  rows: Cell[][]
+  rows: Cell[][],
+  columnCount: number
 ): void {
+  if (rows.length === 0) {
+    return;
+  }
 
-  if (rows.length === 0) return;
-
-  const nextRow =
-    sheet.getUsedRange().getRowCount();
+  const used = sheet.getUsedRange();
+  const nextRow = used ? used.getRowCount() : 1;
 
   sheet
-    .getRangeByIndexes(
-      nextRow,
-      0,
-      rows.length,
-      8
-    )
+    .getRangeByIndexes(nextRow, 0, rows.length, columnCount)
     .setValues(rows);
 }
 
-function appendSummary(
-  sheet: ExcelScript.Worksheet,
-  rows: Cell[][]
-): void {
-
-  if (rows.length === 0) return;
-
-  const nextRow =
-    sheet.getUsedRange().getRowCount();
-
-  sheet
-    .getRangeByIndexes(
-      nextRow,
-      0,
-      rows.length,
-      2
-    )
-    .setValues(rows);
+function normalizeSpaces(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
-function normalizeStreet(
-  street: string
-): string {
-
-  return street
+function normalizeStreet(street: Cell): string {
+  return String(street ?? "")
     .toUpperCase()
-    .replace(/\./g, "")
+    .replace(/[.,]/g, "")
+    .replace(/#\s*/g, " APT ")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/\bSTREET\b/g, "ST")
@@ -122,314 +143,363 @@ function normalizeStreet(
     .replace(/\bDRIVE\b/g, "DR")
     .replace(/\bLANE\b/g, "LN")
     .replace(/\bBOULEVARD\b/g, "BLVD")
-    .replace(/\bCOURT\b/g, "CT");
+    .replace(/\bCOURT\b/g, "CT")
+    .replace(/\bPLACE\b/g, "PL")
+    .replace(/\bCIRCLE\b/g, "CIR")
+    .replace(/\bHIGHWAY\b/g, "HWY")
+    .replace(/\bPARKWAY\b/g, "PKWY")
+    .replace(/\bAPARTMENT\b/g, "APT")
+    .replace(/\bSUITE\b/g, "STE");
+}
+
+function capitalizeNamePart(part: string): string {
+  if (!part) {
+    return part;
+  }
+
+  const lower = part.toLowerCase();
+
+  // McDonald, McArthur, McKinley
+  if (/^mc[a-z]/.test(lower)) {
+    return (
+      "Mc" +
+      lower.charAt(2).toUpperCase() +
+      lower.substring(3)
+    );
+  }
+
+  // O'Brien, D'Angelo
+  if (/^[a-z]'[a-z]/.test(lower)) {
+    return (
+      lower.charAt(0).toUpperCase() +
+      "'" +
+      lower.charAt(2).toUpperCase() +
+      lower.substring(3)
+    );
+  }
+
+  return lower.charAt(0).toUpperCase() + lower.substring(1);
+}
+
+/**
+ * Last name = last word of the Formal Greeting, ignoring suffixes
+ * like Jr. and III. Returns "" when it can't be determined.
+ */
+function getLastName(formal: string): string {
+  const words = normalizeSpaces(formal)
+    .split(" ")
+    .map(w => w.replace(/[.,;:]+$/g, ""))
+    .filter(w => w !== "");
+
+  if (words.length < 2) {
+    return "";
+  }
+
+  while (
+    words.length > 1 &&
+    NAME_SUFFIXES.indexOf(words[words.length - 1].toUpperCase()) !== -1
+  ) {
+    words.pop();
+  }
+
+  if (words.length < 2) {
+    return "";
+  }
+
+  return words[words.length - 1];
+}
+
+/** Fixes ALL CAPS / lowercase last names; leaves mixed case alone. */
+function formatLastName(word: string): string {
+  if (word === word.toUpperCase() || word === word.toLowerCase()) {
+    return word
+      .split("-")
+      .map(part => capitalizeNamePart(part))
+      .join("-");
+  }
+
+  return word;
+}
+
+function toTime(value: Cell): number {
+  if (typeof value === "number") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+
+    return isNaN(parsed) ? -Infinity : parsed;
+  }
+
+  return -Infinity;
+}
+
+function toOrder(value: Cell): number {
+  const n = Number(value);
+
+  return isNaN(n) || String(value ?? "").trim() === ""
+    ? Number.MAX_SAFE_INTEGER
+    : n;
 }
 
 // --------------------------------------------------
 // MAIN
 // --------------------------------------------------
 
-function main(workbook: ExcelScript.Workbook) {
-
-  const sheet =
-    workbook.getActiveWorksheet();
+function main(workbook: ExcelScript.Workbook): void {
+  const dataSheet = workbook.getActiveWorksheet();
+  const sheetName = dataSheet.getName();
 
   if (
     [
-      LOG_SHEET,
-      SUMMARY_SHEET,
       BACKUP_SHEET,
-      "ZipLookup"
-    ].includes(sheet.getName())
+      BLANK_ADDRESSES_SHEET,
+      ONE_WORD_SHEET,
+      CITY_IN_ADDRESS_SHEET,
+      APT_UNIT_SHEET,
+      NON_ZIP4_SHEET,
+      FOUNDATION_ESTATE_SHEET,
+      TRUST_SHEET,
+      CAPITALIZATION_SHEET,
+      DUPLICATE_ADDRESSES_SHEET
+    ].includes(sheetName)
   ) {
-    throw new Error(
-      "Activate your donor worksheet first."
-    );
+    throw new Error("Activate the donor data sheet first.");
   }
 
-  const logSheet =
-    workbook.getWorksheet(LOG_SHEET);
-
-  const summarySheet =
-    workbook.getWorksheet(SUMMARY_SHEET);
-
-  if (!logSheet || !summarySheet) {
-    throw new Error(
-      "Run Phase 1 first."
-    );
+  if (!workbook.getWorksheet(BACKUP_SHEET)) {
+    throw new Error("Run Phase 1 first.");
   }
 
-  const used =
-    sheet.getUsedRange();
+  const used = dataSheet.getUsedRange();
 
   if (!used) {
-    throw new Error(
-      "No data found."
-    );
+    throw new Error("No data found.");
   }
 
-  const values =
-    used.getValues();
+  const values = used.getValues() as Cell[][];
 
-  const headers =
-    values[0].map(v =>
-      String(v).trim()
-    );
-
-  const cOrig =
-    colIndex(headers, "Original Row");
-
-  const cId =
-    colIndex(headers, "Account Case Safe ID");
-
-  const cStreet =
-    colIndex(headers, "Billing Street");
-
-  const cHousehold =
-    colIndex(headers, "Primary Household ID");
-
-  const cFlag =
-    colIndex(headers, "Flag");
-
-  const cReason =
-    colIndex(headers, "Flag Reason");
-
-  const cSuggest =
-    colIndex(headers, "Suggested Fix");
-
-  const logs: Cell[][] = [];
-
-  const streetMap =
-    new Map<string, number[]>();
-
-  const householdMap =
-    new Map<string, number[]>();
-
-  const rowKeyMap =
-    new Map<string, number>();
-
-  const keptRows: Cell[][] = [];
-
-  let deletedExactDuplicates = 0;
-  let streetFlags = 0;
-  let householdFlags = 0;
-
-  // --------------------------------
-  // PASS 1
-  // Remove exact duplicates
-  // --------------------------------
-
-  for (let r = 1; r < values.length; r++) {
-
-    const row = values[r];
-
-    const rowKey =
-      JSON.stringify(row);
-
-    if (rowKeyMap.has(rowKey)) {
-
-      deletedExactDuplicates++;
-
-      logs.push(
-        logRow(
-          row[cOrig],
-          row[cId],
-          "ENTIRE ROW",
-          rowKey,
-          "(row deleted)",
-          "Exact duplicate row",
-          "Deleted"
-        )
-      );
-
-      continue;
-    }
-
-    rowKeyMap.set(rowKey, r);
-
-    keptRows.push(row);
+  if (values.length < 2) {
+    throw new Error("The sheet needs headers and at least one data row.");
   }
 
-  // --------------------------------
-  // PASS 2
-  // Build lookups
-  // --------------------------------
+  const headers = values[0].map(v => String(v).trim());
 
-  for (let r = 0; r < keptRows.length; r++) {
+  // Phase 1 adds helper columns after the original data columns,
+  // so everything left of "Original Row" is the original record.
+  const cOrig = colIndex(headers, "Original Row");
+  const originalColumnCount = cOrig;
+  const originalHeaders = headers.slice(0, originalColumnCount);
 
-    const row = keptRows[r];
+  const cAccountName = colIndex(headers, "Account Name");
+  const cFormal = colIndex(headers, "Formal Greeting");
+  const cInformal = colIndex(headers, "Informal Greeting");
+  const cStreet = colIndex(headers, "Billing Street");
+  const cCity = colIndex(headers, "Billing City");
+  const cZip = colIndex(headers, "Billing Zip/Postal Code");
+  const cLastActivity = colIndex(headers, "Last Activity");
 
-    const street =
-      normalizeStreet(
-        String(
-          row[cStreet] || ""
-        )
-      );
+  const rows: Cell[][] = values.slice(1);
 
-    if (street) {
+  // ----------------------------------
+  // GROUP ROWS BY ADDRESS
+  // ----------------------------------
 
-      if (!streetMap.has(street)) {
-        streetMap.set(street, []);
-      }
+  const addressGroups = new Map<string, number[]>();
 
-      streetMap.get(street)!.push(r);
-    }
+  rows.forEach((row, index) => {
+    const street = normalizeStreet(row[cStreet]);
 
-    const household =
-      String(
-        row[cHousehold] || ""
-      ).trim();
-
-    if (household) {
-
-      if (!householdMap.has(household)) {
-        householdMap.set(household, []);
-      }
-
-      householdMap
-        .get(household)!
-        .push(r);
-    }
-  }
-
-  // --------------------------------
-  // PASS 3
-  // Street duplicate flags
-  // --------------------------------
-
-  streetMap.forEach((rows, street) => {
-
-    if (rows.length < 2) {
+    if (street === "") {
       return;
     }
 
-    for (const r of rows) {
+    const zip5 = String(row[cZip] ?? "").replace(/\D/g, "").slice(0, 5);
 
-      const row =
-        keptRows[r];
+    const place =
+      zip5 !== ""
+        ? zip5
+        : normalizeSpaces(String(row[cCity] ?? "")).toUpperCase();
 
-      row[cFlag] = "REVIEW";
+    const key = `${street}|${place}`;
 
-      row[cReason] = appendText(
-        String(
-          row[cReason] || ""
-        ),
-        "Duplicate street address"
-      );
-
-      row[cSuggest] = appendText(
-        String(
-          row[cSuggest] || ""
-        ),
-        `Another record shares street: ${street}`
-      );
-
-      streetFlags++;
-
-      logs.push(
-        logRow(
-          row[cOrig],
-          row[cId],
-          "Billing Street",
-          row[cStreet],
-          row[cStreet],
-          "Shared Billing Street",
-          "Flagged"
-        )
-      );
-    }
+    const list = addressGroups.get(key) ?? [];
+    list.push(index);
+    addressGroups.set(key, list);
   });
 
-  // --------------------------------
-  // PASS 4
-  // Household flags
-  // --------------------------------
+  // ----------------------------------
+  // BUILD OUTPUT FOR EACH SHARED ADDRESS
+  // ----------------------------------
 
-  householdMap.forEach((rows, householdId) => {
+  const movedIndexes = new Set<number>();
 
-    if (rows.length < 2) {
+  const groupOutputs: {
+    sortKey: number;
+    entries: { order: number; row: Cell[] }[];
+  }[] = [];
+
+  let addressGroupCount = 0;
+  let householdsMerged = 0;
+  let accountsCombined = 0;
+
+  addressGroups.forEach(indexes => {
+    if (indexes.length < 2) {
       return;
     }
 
-    for (const r of rows) {
+    addressGroupCount++;
 
-      const row =
-        keptRows[r];
+    // Group this address's rows by last name.
+    const byLastName = new Map<string, number[]>();
 
-      row[cFlag] = "REVIEW";
+    for (const idx of indexes) {
+      movedIndexes.add(idx);
 
-      row[cReason] = appendText(
-        String(
-          row[cReason] || ""
-        ),
-        "Duplicate household ID"
-      );
+      const lastName = getLastName(String(rows[idx][cFormal] ?? ""));
+      const upper = lastName.toUpperCase();
 
-      row[cSuggest] = appendText(
-        String(
-          row[cSuggest] || ""
-        ),
-        `Shared household ID: ${householdId}`
-      );
+      if (lastName === "" || SKIP_LAST_WORDS.indexOf(upper) !== -1) {
+        continue;
+      }
 
-      householdFlags++;
+      const list = byLastName.get(upper) ?? [];
+      list.push(idx);
+      byLastName.set(upper, list);
+    }
 
-      logs.push(
-        logRow(
-          row[cOrig],
-          row[cId],
-          "Primary Household ID",
-          householdId,
-          householdId,
-          "Shared Household ID",
-          "Flagged"
+    const entries: { order: number; row: Cell[] }[] = [];
+    const inMergedGroup = new Set<number>();
+
+    byLastName.forEach(members => {
+      if (members.length < 2) {
+        return;
+      }
+
+      // Survivor = most recent Last Activity (ties: earliest row).
+      let survivorIdx = members[0];
+      let bestTime = toTime(rows[survivorIdx][cLastActivity]);
+
+      for (const idx of members.slice(1)) {
+        const time = toTime(rows[idx][cLastActivity]);
+
+        if (time > bestTime) {
+          bestTime = time;
+          survivorIdx = idx;
+        }
+      }
+
+      const record = rows[survivorIdx].slice(0, originalColumnCount);
+
+      const distinctFormals = new Set<string>(
+        members.map(idx =>
+          normalizeSpaces(String(rows[idx][cFormal] ?? "")).toLowerCase()
         )
       );
+
+      const sameNameEverywhere = distinctFormals.size === 1;
+
+      if (!(sameNameEverywhere && IDENTICAL_NAMES_STAY_AS_IS)) {
+        const lastName = formatLastName(
+          getLastName(String(rows[survivorIdx][cFormal] ?? ""))
+        );
+
+        const householdName = `${lastName} Household`;
+
+        record[cAccountName] = householdName;
+        record[cFormal] = householdName;
+        record[cInformal] = householdName;
+      }
+
+      const mergedFrom = members
+        .map(idx => String(rows[idx][cOrig] ?? "").trim())
+        .filter(v => v !== "")
+        .sort((a, b) => Number(a) - Number(b))
+        .join(", ");
+
+      entries.push({
+        order: toOrder(rows[survivorIdx][cOrig]),
+        row: [...record, mergedFrom]
+      });
+
+      for (const idx of members) {
+        inMergedGroup.add(idx);
+      }
+
+      householdsMerged++;
+      accountsCombined += members.length;
+    });
+
+    // Rows that weren't merged stay as they are.
+    for (const idx of indexes) {
+      if (inMergedGroup.has(idx)) {
+        continue;
+      }
+
+      entries.push({
+        order: toOrder(rows[idx][cOrig]),
+        row: [...rows[idx].slice(0, originalColumnCount), ""]
+      });
     }
+
+    entries.sort((a, b) => a.order - b.order);
+
+    groupOutputs.push({
+      sortKey: entries[0].order,
+      entries: entries
+    });
   });
 
-  // --------------------------------
-  // Rewrite sheet
-  // --------------------------------
+  groupOutputs.sort((a, b) => a.sortKey - b.sortKey);
 
-  const rebuilt = [
-    headers,
-    ...keptRows
-  ];
+  const outputRows: Cell[][] = [];
 
-  sheet.getUsedRange()?.clear();
+  for (const group of groupOutputs) {
+    for (const entry of group.entries) {
+      outputRows.push(entry.row);
+    }
+  }
 
-  sheet
-    .getRangeByIndexes(
-      0,
-      0,
-      rebuilt.length,
-      rebuilt[0].length
-    )
-    .setValues(rebuilt);
+  // ----------------------------------
+  // CREATE TAB AND WRITE ROWS
+  // ----------------------------------
 
-  appendLog(logSheet, logs);
+  const duplicatesSheet = getOrCreateReviewSheet(
+    workbook,
+    DUPLICATE_ADDRESSES_SHEET,
+    [...originalHeaders, MERGED_FROM_HEADER],
+    DUPLICATES_TAB_COLOR
+  );
 
-  appendSummary(summarySheet, [
-    [
-      "Phase 7A: Exact duplicates deleted",
-      deletedExactDuplicates
-    ],
-    [
-      "Phase 7A: Duplicate street flags",
-      streetFlags
-    ],
-    [
-      "Phase 7A: Duplicate household flags",
-      householdFlags
-    ]
-  ]);
+  appendRows(duplicatesSheet, outputRows, originalColumnCount + 1);
+
+  // ----------------------------------
+  // REWRITE DATA SHEET (only if rows moved)
+  // ----------------------------------
+
+  const kept: Cell[][] = rows.filter((_, index) => !movedIndexes.has(index));
+
+  if (movedIndexes.size > 0) {
+    // Clear contents only, so header styling and number formats stay.
+    used.clear(ExcelScript.ClearApplyTo.contents);
+
+    const rebuilt: Cell[][] = [headers, ...kept];
+
+    dataSheet
+      .getRangeByIndexes(0, 0, rebuilt.length, headers.length)
+      .setValues(rebuilt);
+  }
 
   console.log(
-    `PHASE 7A COMPLETE
+    `PHASE 8 COMPLETE
 
-Exact duplicates deleted: ${deletedExactDuplicates}
-Duplicate street flags: ${streetFlags}
-Duplicate household flags: ${householdFlags}`
+Shared addresses found: ${addressGroupCount}
+Rows moved off the main sheet: ${movedIndexes.size}
+Households merged: ${householdsMerged}
+  (accounts combined into them: ${accountsCombined})
+Rows written to ${DUPLICATE_ADDRESSES_SHEET}: ${outputRows.length}
+
+Remaining rows on main sheet: ${kept.length}`
   );
 }
