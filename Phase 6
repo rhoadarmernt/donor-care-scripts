@@ -55,7 +55,7 @@ const ALWAYS_UPPERCASE: string[] = [
 ];
 
 // Small words that stay lowercase unless they are the first word.
-const LOWERCASE_WORDS: string[] = ["and", "of", "the", "del", "de"];
+const LOWERCASE_WORDS: string[] = ["and", "of", "the", "del"];
 
 const HEADER_COLOR = "#D9E1F2";
 const CAPITALIZATION_TAB_COLOR = "#2E9E9E";
