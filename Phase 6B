@@ -1,0 +1,438 @@
+/**
+ * PHASE 6B - NAME & GREETING CAPITALIZATION FIX
+ *
+ * Run this ONCE after Phase 6. The active sheet doesn't matter; this
+ * works directly on the "Greeting Capitalization" tab.
+ *
+ * Fixes Account Name, Formal Greeting, and Informal Greeting on every
+ * row in that tab, using these rules:
+ *   - Names are Title Case (MARY-ANNE -> Mary-Anne)
+ *   - "and", "of", "the", and "del" are lowercase (except as the
+ *     first word, or right after an opening parenthesis or quote)
+ *   - A name right after a "(" is capitalized: "John (johnny) Smith"
+ *     -> "John (Johnny) Smith"
+ *   - McDonald / O'Brien style names are handled
+ *   - Intentional mixed case is left alone (MacArthur, DeMarco, LaToya)
+ *   - Words in ALWAYS_UPPERCASE stay uppercase (LLC, II, III, IV...)
+ *   - Initials stay capitalized (J, J., J.R.)
+ *
+ * Account Name only: acronyms are kept when the name looks like an
+ * organization (it contains a word like Foundation, Trust, Inc, or
+ * University). In those names, short all-caps words (2-4 letters,
+ * like UCLA) are kept, and anything in KEEP_UPPERCASE_WORDS is always
+ * kept. Person names such as "Lydia RODRIGUEZ" get the full fix.
+ *
+ * Only those three columns are changed, and only where something
+ * actually needs fixing. Rows stay in the tab, so Phase 7 can merge
+ * them back into the main sheet afterward.
+ *
+ * Safe to run again: already-fixed values come out unchanged.
+ */
+
+type Cell = string | number | boolean;
+
+// --------------------------------------------------
+// SETTINGS
+// --------------------------------------------------
+
+const CAPITALIZATION_SHEET = "Greeting Capitalization";
+
+// Words that must always be fully uppercase (compared without
+// punctuation, so "LLC," and "L.L.C." are both covered).
+const ALWAYS_UPPERCASE: string[] = [
+    "LLC",
+    "II",
+    "III",
+    "IV",
+    "V",
+    "VI",
+    "VII",
+    "VIII",
+    "IX",
+    "X"
+];
+
+// Small words that stay lowercase unless they are the first word
+// (or come right after an opening parenthesis or quote).
+const LOWERCASE_WORDS: string[] = ["and", "of", "the", "del"];
+
+// A name containing one of these is treated as an organization, where
+// short all-caps words may be acronyms.
+const ORGANIZATION_WORDS: string[] = [
+    "FOUNDATION", "FOUNDATIONS", "TRUST", "ESTATE", "FUND", "INC",
+    "CORP", "CORPORATION", "COMPANY", "CO", "LLC", "LLP", "LP",
+    "ASSOCIATION", "ASSOC", "SOCIETY", "UNIVERSITY", "COLLEGE",
+    "SCHOOL", "CHURCH", "BANK", "GROUP", "PARTNERS", "PARTNERSHIP",
+    "CHARITIES", "INSTITUTE", "CENTER", "CLUB", "COUNCIL", "LEAGUE"
+];
+
+// Always kept uppercase in an Account Name (add your own).
+const KEEP_UPPERCASE_WORDS: string[] = [
+    "UCLA", "USC", "IBM", "YMCA", "YWCA", "NAACP", "USA"
+];
+
+const CHUNK_SIZE = 500;
+
+// How many before/after examples to print in the results.
+const EXAMPLE_COUNT = 15;
+
+// --------------------------------------------------
+// HELPERS
+// --------------------------------------------------
+
+function colIndex(headers: string[], name: string): number {
+    const idx = headers.indexOf(name);
+
+    if (idx === -1) {
+        throw new Error(`Column not found: "${name}"`);
+    }
+
+    return idx;
+}
+
+function normalizeSpaces(value: string): string {
+    return value.replace(/\s+/g, " ").trim();
+}
+
+function capitalizeNamePart(part: string): string {
+    if (!part) {
+        return part;
+    }
+
+    const lower = part.toLowerCase();
+
+    // McDonald, McArthur, McKinley
+    if (/^mc[a-z]/.test(lower)) {
+        return (
+            "Mc" +
+            lower.charAt(2).toUpperCase() +
+            lower.substring(3)
+        );
+    }
+
+    // O'Brien, D'Angelo
+    if (/^[a-z]'[a-z]/.test(lower)) {
+        return (
+            lower.charAt(0).toUpperCase() +
+            "'" +
+            lower.charAt(2).toUpperCase() +
+            lower.substring(3)
+        );
+    }
+
+    return lower.charAt(0).toUpperCase() + lower.substring(1);
+}
+
+/**
+ * Initials: a single letter ("J") or letters each followed by a
+ * period ("J.", "J.R.", "L.L.C.").
+ */
+function isInitials(word: string): boolean {
+    return /^([A-Za-z]\.)+$/.test(word) || /^[A-Za-z]$/.test(word);
+}
+
+function isAlwaysUppercase(word: string): boolean {
+    const bare = word.replace(/[^A-Za-z]/g, "").toUpperCase();
+
+    return bare !== "" && ALWAYS_UPPERCASE.indexOf(bare) !== -1;
+}
+
+/**
+ * Returns the text as it should be capitalized.
+ * Spacing is normalized; nothing else (like "&") is rewritten.
+ *
+ * Opening brackets/quotes at the start of a word and closing
+ * brackets/quotes at the end are set aside while the name inside is
+ * fixed, so "(johnny)" becomes "(Johnny)".
+ */
+function capitalizeGreeting(value: string): string {
+    const normalized = normalizeSpaces(value);
+
+    if (!normalized) {
+        return "";
+    }
+
+    const output: string[] = [];
+    const words = normalized.split(" ");
+
+    for (let i = 0; i < words.length; i++) {
+        const word = words[i];
+
+        // prefix: opening ( [ or quote   core: the name   suffix: closing
+        // ) ] or quote, plus any punctuation after it
+        const parts = word.match(
+            /^([(\["\u201C]*)(.*?)([)\]"\u201D]+[.,;:]*)?$/
+        );
+
+        const prefix = parts ? parts[1] : "";
+        const core = parts ? parts[2] : word;
+        const suffix = parts && parts[3] ? parts[3] : "";
+
+        // Nothing to fix (for example a lone "(" or ")")
+        if (core === "") {
+            output.push(word);
+            continue;
+        }
+
+        // First word, or a word right after an opening ( [ or quote
+        const startsPhrase = i === 0 || prefix !== "";
+
+        // and / of / the / del stay lowercase unless they start a phrase
+        if (
+            !startsPhrase &&
+            LOWERCASE_WORDS.indexOf(core.toLowerCase()) !== -1
+        ) {
+            output.push(prefix + core.toLowerCase() + suffix);
+            continue;
+        }
+
+        // LLC, III, etc. stay uppercase
+        if (isAlwaysUppercase(core)) {
+            output.push(prefix + core.toUpperCase() + suffix);
+            continue;
+        }
+
+        // Initials stay (or become) uppercase
+        if (isInitials(core)) {
+            output.push(prefix + core.toUpperCase() + suffix);
+            continue;
+        }
+
+        // Preserve intentional mixed capitalization (MacArthur, LaToya)
+        const isMixedCase =
+            core !== core.toUpperCase() &&
+            core !== core.toLowerCase();
+
+        const beginsWithUppercase = /^[A-Z]/.test(core);
+        const restContainsLowercase = /[a-z]/.test(core.substring(1));
+
+        if (isMixedCase && beginsWithUppercase && restContainsLowercase) {
+            output.push(word);
+            continue;
+        }
+
+        // Capitalize each part of a hyphenated name
+        output.push(
+            prefix +
+            core
+                .split("-")
+                .map(part => capitalizeNamePart(part))
+                .join("-") +
+            suffix
+        );
+    }
+
+    return output.join(" ");
+}
+
+/**
+ * Account Name version. Same rules as capitalizeGreeting, plus
+ * acronym protection for organizations (see header comment).
+ */
+function capitalizeAccountName(value: string): string {
+    const normalized = normalizeSpaces(value);
+
+    if (!normalized) {
+        return "";
+    }
+
+    const fixed = capitalizeGreeting(normalized);
+
+    const originalWords = normalized.split(" ");
+    const fixedWords = fixed.split(" ");
+
+    const isOrganization = originalWords.some(
+        w =>
+            ORGANIZATION_WORDS.indexOf(
+                w.replace(/[^A-Za-z]/g, "").toUpperCase()
+            ) !== -1
+    );
+
+    const isMixedCaseName =
+        /[a-z]/.test(normalized) && /[A-Z]/.test(normalized);
+
+    return fixedWords
+        .map((word, i) => {
+            const original = originalWords[i];
+            const letters = original.replace(/[^A-Za-z]/g, "");
+
+            // Listed acronyms always stay uppercase.
+            if (KEEP_UPPERCASE_WORDS.indexOf(letters.toUpperCase()) !== -1) {
+                return original.toUpperCase();
+            }
+
+            // In a mixed-case organization name, short all-caps words
+            // are kept as acronyms.
+            if (
+                isOrganization &&
+                isMixedCaseName &&
+                letters.length >= 2 &&
+                letters.length <= 4 &&
+                original === original.toUpperCase()
+            ) {
+                return original;
+            }
+
+            return word;
+        })
+        .join(" ");
+}
+
+function writeColumnInChunks(
+    sheet: ExcelScript.Worksheet,
+    column: number,
+    rows: Cell[][]
+): void {
+    for (let offset = 0; offset < rows.length; offset += CHUNK_SIZE) {
+        const chunk = rows.slice(offset, offset + CHUNK_SIZE);
+
+        sheet
+            .getRangeByIndexes(1 + offset, column, chunk.length, 1)
+            .setValues(chunk);
+
+        // Reading a value forces Excel to process this chunk now.
+        sheet.getRange("A1").getValue();
+    }
+}
+
+// --------------------------------------------------
+// MAIN
+// --------------------------------------------------
+
+function main(workbook: ExcelScript.Workbook): void {
+    const sheet = workbook.getWorksheet(CAPITALIZATION_SHEET);
+
+    if (!sheet) {
+        throw new Error(
+            `The "${CAPITALIZATION_SHEET}" tab was not found. Run Phase 6 first.`
+        );
+    }
+
+    const used = sheet.getUsedRange();
+
+    if (!used) {
+        throw new Error(`"${CAPITALIZATION_SHEET}" is empty.`);
+    }
+
+    const values = used.getValues() as Cell[][];
+
+    if (values.length < 2) {
+        console.log(
+            `PHASE 6.5 COMPLETE\n\nNo rows in ${CAPITALIZATION_SHEET}. Nothing to fix.`
+        );
+        return;
+    }
+
+    const headers = values[0].map(v => String(v).trim());
+
+    const cAccount = colIndex(headers, "Account Name");
+    const cFormal = colIndex(headers, "Formal Greeting");
+    const cInformal = colIndex(headers, "Informal Greeting");
+
+    const accountColumn: Cell[][] = [];
+    const formalColumn: Cell[][] = [];
+    const informalColumn: Cell[][] = [];
+    const examples: string[] = [];
+
+    let accountFixes = 0;
+    let formalFixes = 0;
+    let informalFixes = 0;
+    let rowsChanged = 0;
+
+    for (let i = 1; i < values.length; i++) {
+        const row = values[i];
+
+        let newAccount = row[cAccount];
+        let newFormal = row[cFormal];
+        let newInformal = row[cInformal];
+        let changed = false;
+
+        // ---- Account Name ----
+
+        const accountText = String(row[cAccount] ?? "");
+
+        if (normalizeSpaces(accountText) !== "") {
+            const fixed = capitalizeAccountName(accountText);
+
+            if (fixed !== accountText) {
+                newAccount = fixed;
+                accountFixes++;
+                changed = true;
+
+                if (examples.length < EXAMPLE_COUNT) {
+                    examples.push(`  Account: "${accountText}" -> "${fixed}"`);
+                }
+            }
+        }
+
+        // ---- Formal Greeting ----
+
+        const formalText = String(row[cFormal] ?? "");
+
+        if (normalizeSpaces(formalText) !== "") {
+            const fixed = capitalizeGreeting(formalText);
+
+            if (fixed !== formalText) {
+                newFormal = fixed;
+                formalFixes++;
+                changed = true;
+
+                if (examples.length < EXAMPLE_COUNT) {
+                    examples.push(`  Formal: "${formalText}" -> "${fixed}"`);
+                }
+            }
+        }
+
+        // ---- Informal Greeting ----
+
+        const informalText = String(row[cInformal] ?? "");
+
+        if (normalizeSpaces(informalText) !== "") {
+            const fixed = capitalizeGreeting(informalText);
+
+            if (fixed !== informalText) {
+                newInformal = fixed;
+                informalFixes++;
+                changed = true;
+
+                if (examples.length < EXAMPLE_COUNT) {
+                    examples.push(`  Informal: "${informalText}" -> "${fixed}"`);
+                }
+            }
+        }
+
+        if (changed) {
+            rowsChanged++;
+        }
+
+        accountColumn.push([newAccount]);
+        formalColumn.push([newFormal]);
+        informalColumn.push([newInformal]);
+    }
+
+    // Only write a column if something in it changed.
+    if (accountFixes > 0) {
+        writeColumnInChunks(sheet, cAccount, accountColumn);
+    }
+
+    if (formalFixes > 0) {
+        writeColumnInChunks(sheet, cFormal, formalColumn);
+    }
+
+    if (informalFixes > 0) {
+        writeColumnInChunks(sheet, cInformal, informalColumn);
+    }
+
+    console.log(
+        `PHASE 6.5 COMPLETE
+
+Rows in ${CAPITALIZATION_SHEET}: ${values.length - 1}
+Rows changed: ${rowsChanged}
+Account Name fixes: ${accountFixes}
+Formal Greeting fixes: ${formalFixes}
+Informal Greeting fixes: ${informalFixes}
+
+Examples:
+${examples.length > 0 ? examples.join("\n") : "  (none)"}`
+    );
+}
