@@ -1,0 +1,318 @@
+/**
+ * PHASE 7 - MERGE REVIEWED ROWS BACK INTO THE MAIN SHEET
+ *
+ * Run this ONCE after you have reviewed the review tabs (deleting or
+ * editing rows as needed), with the donor data worksheet active.
+ *
+ * What it does:
+ *   1. Checks that every review tab still has the original column
+ *      headers, before changing anything
+ *   2. Merges all remaining rows from the tabs in MERGE_TABS back
+ *      into the main sheet
+ *   3. Restores each row's "Original Row" number (looked up in
+ *      "Raw Backup" by Account Case Safe ID) and sorts the main
+ *      sheet back into original order
+ *   4. Skips duplicates: a row copied to two tabs (for example
+ *      Foundation or Estate AND Trust) is merged only once, using
+ *      the copy from the tab listed first in MERGE_TABS
+ *   5. Deletes the merged review tabs, so rows live in only one place
+ *
+ * Flag, Flag Reason, and Suggested Fix are left blank for merged rows.
+ *
+ * "Blank Addresses" and "Raw Backup" are NOT merged or deleted. To
+ * merge (and delete) Blank Addresses too, add BLANK_ADDRESSES_SHEET
+ * to MERGE_TABS.
+ */
+
+type Cell = string | number | boolean;
+
+// --------------------------------------------------
+// SETTINGS
+// --------------------------------------------------
+
+const BACKUP_SHEET = "Raw Backup";
+const BLANK_ADDRESSES_SHEET = "Blank Addresses";
+const ONE_WORD_SHEET = "One Word Address";
+const CITY_IN_ADDRESS_SHEET = "City in Address";
+const APT_UNIT_SHEET = "Apt-Unit Duplicated";
+const NON_ZIP4_SHEET = "Non-Zip+4 Addresses";
+const FOUNDATION_ESTATE_SHEET = "Foundation or Estate";
+const TRUST_SHEET = "Trust";
+const CAPITALIZATION_SHEET = "Greeting Capitalization";
+
+// Tabs to merge back and then delete, in priority order (used when
+// the same row appears in more than one tab).
+const MERGE_TABS: string[] = [
+    ONE_WORD_SHEET,
+    CITY_IN_ADDRESS_SHEET,
+    APT_UNIT_SHEET,
+    NON_ZIP4_SHEET,
+    FOUNDATION_ESTATE_SHEET,
+    TRUST_SHEET,
+    CAPITALIZATION_SHEET
+];
+
+// Every sheet that is not the main donor data sheet.
+const NON_DATA_SHEETS: string[] = [
+    BACKUP_SHEET,
+    BLANK_ADDRESSES_SHEET,
+    ...MERGE_TABS
+];
+
+// --------------------------------------------------
+// HELPERS
+// --------------------------------------------------
+
+function colIndex(headers: string[], name: string): number {
+    const idx = headers.indexOf(name);
+
+    if (idx === -1) {
+        throw new Error(`Column not found: "${name}"`);
+    }
+
+    return idx;
+}
+
+function isBlankRow(row: Cell[]): boolean {
+    return row.every(cell => String(cell ?? "").trim() === "");
+}
+
+/**
+ * Identifies a row for duplicate detection: its Account Case Safe ID
+ * when present, otherwise the whole row's contents.
+ */
+function rowKey(record: Cell[], idColumn: number): string {
+    const id = String(record[idColumn] ?? "").trim();
+
+    return id !== "" ? `ID:${id}` : `ROW:${JSON.stringify(record)}`;
+}
+
+// --------------------------------------------------
+// MAIN
+// --------------------------------------------------
+
+function main(workbook: ExcelScript.Workbook): void {
+    const dataSheet = workbook.getActiveWorksheet();
+    const sheetName = dataSheet.getName();
+
+    if (NON_DATA_SHEETS.includes(sheetName)) {
+        throw new Error("Activate the donor data sheet first.");
+    }
+
+    const backupSheet = workbook.getWorksheet(BACKUP_SHEET);
+
+    if (!backupSheet) {
+        throw new Error("Run Phase 1 first.");
+    }
+
+    const used = dataSheet.getUsedRange();
+
+    if (!used) {
+        throw new Error("No data found.");
+    }
+
+    const values = used.getValues() as Cell[][];
+
+    const headers = values[0].map(v => String(v).trim());
+
+    // Phase 1 adds helper columns after the original data columns,
+    // so everything left of "Original Row" is the original record.
+    const cOrig = colIndex(headers, "Original Row");
+    const originalColumnCount = cOrig;
+    const originalHeaders = headers.slice(0, originalColumnCount);
+    const helperHeaders = headers.slice(originalColumnCount);
+
+    const cId = colIndex(headers, "Account Case Safe ID");
+
+    // ----------------------------------
+    // READ AND VALIDATE REVIEW TABS
+    // (nothing is changed until all tabs pass)
+    // ----------------------------------
+
+    const tabData: { name: string; rows: Cell[][] }[] = [];
+
+    for (const tabName of MERGE_TABS) {
+        const tab = workbook.getWorksheet(tabName);
+
+        if (!tab) continue;
+
+        const tabRange = tab.getUsedRange();
+
+        if (!tabRange) continue;
+
+        const tabValues = tabRange.getValues() as Cell[][];
+
+        if (tabValues.length < 2) continue;
+
+        const tabHeaders = tabValues[0]
+            .map(v => String(v).trim())
+            .slice(0, originalColumnCount);
+
+        const headersMatch =
+            tabValues[0].length >= originalColumnCount &&
+            originalHeaders.every((h, i) => h === tabHeaders[i]);
+
+        if (!headersMatch) {
+            throw new Error(
+                `The headers on "${tabName}" don't match the main sheet's original columns. ` +
+                `Restore the original header row and run Phase 7 again. Nothing was changed.`
+            );
+        }
+
+        tabData.push({
+            name: tabName,
+            rows: tabValues.slice(1)
+        });
+    }
+
+    // ----------------------------------
+    // LOOK UP ORIGINAL ROW NUMBERS FROM RAW BACKUP
+    // ----------------------------------
+
+    const backupRange = backupSheet.getUsedRange();
+    const backupValues = backupRange
+        ? (backupRange.getValues() as Cell[][])
+        : [];
+
+    const originalRowById = new Map<string, number>();
+
+    if (backupValues.length > 1) {
+        const backupHeaders = backupValues[0].map(v => String(v).trim());
+        const cBackupId = colIndex(backupHeaders, "Account Case Safe ID");
+
+        for (let i = 1; i < backupValues.length; i++) {
+            const id = String(backupValues[i][cBackupId] ?? "").trim();
+
+            // Same numbering Phase 1 used: sheet row number, header = row 1.
+            if (id !== "" && !originalRowById.has(id)) {
+                originalRowById.set(id, i + 1);
+            }
+        }
+    }
+
+    // ----------------------------------
+    // BUILD MERGED ROW LIST
+    // ----------------------------------
+
+    const seen = new Set<string>();
+
+    const existingRows: Cell[][] = [];
+
+    for (let i = 1; i < values.length; i++) {
+        const row = values[i];
+
+        seen.add(rowKey(row.slice(0, originalColumnCount), cId));
+        existingRows.push(row);
+    }
+
+    const mergedRows: Cell[][] = [];
+    const countsByTab: string[] = [];
+
+    let duplicatesSkipped = 0;
+
+    for (const tab of tabData) {
+        let mergedFromTab = 0;
+
+        for (const tabRow of tab.rows) {
+            const record = tabRow.slice(0, originalColumnCount);
+
+            if (isBlankRow(record)) {
+                continue;
+            }
+
+            const key = rowKey(record, cId);
+
+            if (seen.has(key)) {
+                duplicatesSkipped++;
+                continue;
+            }
+
+            seen.add(key);
+
+            const id = String(record[cId] ?? "").trim();
+            const originalRowNumber = originalRowById.get(id);
+
+            const helperValues: Cell[] = helperHeaders.map(header =>
+                header === "Original Row" && originalRowNumber !== undefined
+                    ? originalRowNumber
+                    : ""
+            );
+
+            mergedRows.push([...record, ...helperValues]);
+            mergedFromTab++;
+        }
+
+        countsByTab.push(`  ${tab.name}: ${mergedFromTab} merged`);
+    }
+
+    // ----------------------------------
+    // SORT BACK INTO ORIGINAL ORDER
+    // ----------------------------------
+
+    const allRows: Cell[][] = [...existingRows, ...mergedRows];
+
+    const orderedRows = allRows
+        .map((row, index) => ({
+            row: row,
+            index: index,
+            order: Number(row[cOrig])
+        }))
+        .sort((a, b) => {
+            const aValid = !isNaN(a.order) && String(a.row[cOrig]) !== "";
+            const bValid = !isNaN(b.order) && String(b.row[cOrig]) !== "";
+
+            if (aValid && bValid && a.order !== b.order) {
+                return a.order - b.order;
+            }
+
+            // Rows without an Original Row number go last, in current order.
+            if (aValid !== bValid) {
+                return aValid ? -1 : 1;
+            }
+
+            return a.index - b.index;
+        })
+        .map(item => item.row);
+
+    // ----------------------------------
+    // REWRITE MAIN SHEET
+    // ----------------------------------
+
+    // Clear contents only, so header styling and number formats stay.
+    used.clear(ExcelScript.ClearApplyTo.contents);
+
+    const rebuilt: Cell[][] = [headers, ...orderedRows];
+
+    dataSheet
+        .getRangeByIndexes(0, 0, rebuilt.length, headers.length)
+        .setValues(rebuilt);
+
+    // ----------------------------------
+    // DELETE MERGED TABS
+    // ----------------------------------
+
+    // Runs only after the main sheet has been rewritten successfully.
+    // This includes review tabs that were already empty.
+    const deletedTabs: string[] = [];
+
+    for (const tabName of MERGE_TABS) {
+        const tab = workbook.getWorksheet(tabName);
+
+        if (tab) {
+            tab.delete();
+            deletedTabs.push(tabName);
+        }
+    }
+
+    console.log(
+        `PHASE 7 COMPLETE
+
+Rows merged back by tab:
+${countsByTab.length > 0 ? countsByTab.join("\n") : "  (no rows found in review tabs)"}
+
+Duplicate rows skipped: ${duplicatesSkipped}
+Total rows on main sheet: ${orderedRows.length}
+
+Tabs deleted: ${deletedTabs.length > 0 ? deletedTabs.join(", ") : "none"}`
+    );
+}
