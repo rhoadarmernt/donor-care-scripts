@@ -12,10 +12,8 @@
  *        - Flag
  *        - Flag Reason
  *        - Suggested Fix
- *   4. Creates:
- *        - Changes Log
- *        - Summary
- *        - Deleted Rows
+ *   4. Creates a "Blank Addresses" sheet for rows removed
+ *      because Billing Street is empty
  *
  * It does not modify existing donor data.
  */
@@ -50,39 +48,16 @@ const HELPER_HEADERS: string[] = [
   "Suggested Fix"
 ];
 
-const LOG_HEADERS: string[] = [
-  "Original Row",
-  "Account Case Safe ID",
-  "Column",
-  "Original Value",
-  "New Value",
-  "Rule Triggered",
-  "Action",
-  "Timestamp"
-];
-
 const BACKUP_SHEET = "Raw Backup";
-const LOG_SHEET = "Changes Log";
-const SUMMARY_SHEET = "Summary";
-const DELETED_SHEET = "Deleted Rows";
+const BLANK_ADDRESSES_SHEET = "Blank Addresses";
 
 const HEADER_COLOR = "#D9E1F2";
 const BACKUP_TAB_COLOR = "#808080";
-const DELETED_TAB_COLOR = "#FF6666";
+const BLANK_ADDRESSES_TAB_COLOR = "#FF6666";
 
 // --------------------------------------------------
 // HELPERS
 // --------------------------------------------------
-
-function formatTimestamp(date: Date = new Date()): string {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  const hh = String(date.getHours()).padStart(2, "0");
-  const min = String(date.getMinutes()).padStart(2, "0");
-
-  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
-}
 
 function styleHeader(range: ExcelScript.Range): void {
   const format = range.getFormat();
@@ -105,28 +80,6 @@ function writeHeader(
   headerRange.setValues([headers]);
   styleHeader(headerRange);
   sheet.getFreezePanes().freezeRows(1);
-}
-
-function appendRows(
-  sheet: ExcelScript.Worksheet,
-  rows: Cell[][],
-  columnCount: number
-): void {
-  if (rows.length === 0) {
-    return;
-  }
-
-  const usedRange = sheet.getUsedRange();
-  const nextRow = usedRange ? usedRange.getRowCount() : 0;
-
-  sheet
-    .getRangeByIndexes(
-      nextRow,
-      0,
-      rows.length,
-      columnCount
-    )
-    .setValues(rows);
 }
 
 // --------------------------------------------------
@@ -163,7 +116,6 @@ function main(workbook: ExcelScript.Workbook): void {
   const values = usedRange.getValues();
   const rowCount = usedRange.getRowCount();
   const columnCount = usedRange.getColumnCount();
-  const timestamp = formatTimestamp();
 
   const headers = values[0].map(value =>
     String(value).trim()
@@ -242,85 +194,19 @@ function main(workbook: ExcelScript.Workbook): void {
   dataSheet.getFreezePanes().freezeRows(1);
 
   // --------------------------------------------------
-  // CHANGES LOG
+  // BLANK ADDRESSES
   // --------------------------------------------------
 
-  let logSheet = workbook.getWorksheet(LOG_SHEET);
+  let blankSheet = workbook.getWorksheet(BLANK_ADDRESSES_SHEET);
 
-  if (!logSheet) {
-    logSheet = workbook.addWorksheet(LOG_SHEET);
-    writeHeader(logSheet, LOG_HEADERS);
-  }
+  if (!blankSheet) {
+    blankSheet = workbook.addWorksheet(BLANK_ADDRESSES_SHEET);
 
-  appendRows(
-    logSheet,
-    [[
-      "-",
-      "-",
-      "-",
-      "-",
-      "-",
-      "Phase 1 setup complete",
-      "Setup",
-      timestamp
-    ]],
-    LOG_HEADERS.length
-  );
+    // Same headers as the donor data sheet, in the same order,
+    // so removed rows can be pasted in as-is.
+    writeHeader(blankSheet, headers);
 
-  // --------------------------------------------------
-  // SUMMARY
-  // --------------------------------------------------
-
-  let summarySheet = workbook.getWorksheet(SUMMARY_SHEET);
-
-  if (!summarySheet) {
-    summarySheet = workbook.addWorksheet(SUMMARY_SHEET);
-
-    writeHeader(summarySheet, ["Metric", "Count"]);
-
-    summarySheet
-      .getRangeByIndexes(1, 0, 2, 2)
-      .setValues([
-        [
-          "Data rows at start (excluding header)",
-          rowCount - 1
-        ],
-        [
-          "Setup run",
-          timestamp
-        ]
-      ]);
-
-    summarySheet
-      .getRange("A:A")
-      .getFormat()
-      .setColumnWidth(260);
-
-    summarySheet
-      .getRange("B:B")
-      .getFormat()
-      .setColumnWidth(180);
-  }
-
-  // --------------------------------------------------
-  // DELETED ROWS
-  // --------------------------------------------------
-
-  let deletedSheet = workbook.getWorksheet(DELETED_SHEET);
-
-  if (!deletedSheet) {
-    deletedSheet = workbook.addWorksheet(DELETED_SHEET);
-
-    writeHeader(
-      deletedSheet,
-      [
-        "Deleted Reason",
-        "Deleted Timestamp",
-        ...headers
-      ]
-    );
-
-    deletedSheet.setTabColor(DELETED_TAB_COLOR);
+    blankSheet.setTabColor(BLANK_ADDRESSES_TAB_COLOR);
   }
 
   // --------------------------------------------------
@@ -334,16 +220,6 @@ function main(workbook: ExcelScript.Workbook): void {
         0,
         1,
         columnCount + helpersToAdd.length
-      )
-      .getFormat()
-      .autofitColumns();
-
-    logSheet
-      .getRangeByIndexes(
-        0,
-        0,
-        1,
-        LOG_HEADERS.length
       )
       .getFormat()
       .autofitColumns();
@@ -371,9 +247,7 @@ ${BACKUP_SHEET}
 Helper columns added:
 ${helperMessage}
 
-Additional sheets prepared:
-${LOG_SHEET}
-${SUMMARY_SHEET}
-${DELETED_SHEET}`
+Additional sheet prepared:
+${BLANK_ADDRESSES_SHEET}`
   );
 }
