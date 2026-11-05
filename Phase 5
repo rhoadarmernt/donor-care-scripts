@@ -1,0 +1,345 @@
+/**
+ * PHASE 5 - FOUNDATION / ESTATE / TRUST DETECTION
+ *
+ * Run this ONCE after Phase 4, with the donor data worksheet active.
+ *
+ * Moves rows to review tabs:
+ *   1. "Foundation or Estate" - "Foundation" or "Estate" appears in
+ *                               Account Name, Formal Greeting, or
+ *                               Informal Greeting
+ *   2. "Trust"                - "Trust" appears in the same columns
+ *
+ * Matching is case-insensitive and whole-word (plural allowed), so
+ * "Smith Family Trusts" matches but "Trustee" and "Entrust" do not.
+ *
+ * A row that matches both checks is copied to both tabs, but removed
+ * from its source sheet only once.
+ *
+ * Rows are searched on the main sheet AND on the earlier review tabs
+ * listed in SCAN_TABS (edit that list to change this), since Phases
+ * 3 and 4 may have already moved some of these rows out of the main
+ * sheet.
+ *
+ * Moved rows keep the original columns only (same layout as the
+ * Blank Addresses sheet). Nothing else in the data is changed.
+ */
+
+type Cell = string | number | boolean;
+
+// --------------------------------------------------
+// SETTINGS
+// --------------------------------------------------
+
+const BACKUP_SHEET = "Raw Backup";
+const BLANK_ADDRESSES_SHEET = "Blank Addresses";
+const ONE_WORD_SHEET = "One Word Address";
+const CITY_IN_ADDRESS_SHEET = "City in Address";
+const APT_UNIT_SHEET = "Apt-Unit Duplicated";
+const NON_ZIP4_SHEET = "Non-Zip+4 Addresses";
+const FOUNDATION_ESTATE_SHEET = "Foundation or Estate";
+const TRUST_SHEET = "Trust";
+
+// Earlier review tabs that are also searched (if they exist).
+const SCAN_TABS: string[] = [
+    ONE_WORD_SHEET,
+    CITY_IN_ADDRESS_SHEET,
+    APT_UNIT_SHEET,
+    NON_ZIP4_SHEET
+];
+
+const SEARCH_COLUMNS: string[] = [
+    "Account Name",
+    "Formal Greeting",
+    "Informal Greeting"
+];
+
+const FOUNDATION_ESTATE_PATTERN = /\b(foundations?|estates?)\b/i;
+const TRUST_PATTERN = /\btrusts?\b/i;
+
+const HEADER_COLOR = "#D9E1F2";
+const FOUNDATION_ESTATE_TAB_COLOR = "#70AD47";
+const TRUST_TAB_COLOR = "#7030A0";
+
+// --------------------------------------------------
+// HELPERS
+// --------------------------------------------------
+
+function colIndex(headers: string[], name: string): number {
+    const idx = headers.indexOf(name);
+
+    if (idx === -1) {
+        throw new Error(`Column not found: "${name}"`);
+    }
+
+    return idx;
+}
+
+function getOrCreateReviewSheet(
+    workbook: ExcelScript.Workbook,
+    name: string,
+    headers: string[],
+    tabColor: string
+): ExcelScript.Worksheet {
+    let sheet = workbook.getWorksheet(name);
+
+    if (!sheet) {
+        sheet = workbook.addWorksheet(name);
+
+        const headerRange = sheet.getRangeByIndexes(0, 0, 1, headers.length);
+
+        headerRange.setValues([headers]);
+        headerRange.getFormat().getFont().setBold(true);
+        headerRange.getFormat().getFill().setColor(HEADER_COLOR);
+
+        sheet.getFreezePanes().freezeRows(1);
+        sheet.setTabColor(tabColor);
+    }
+
+    return sheet;
+}
+
+function appendRows(
+    sheet: ExcelScript.Worksheet,
+    rows: Cell[][],
+    columnCount: number
+): void {
+    if (rows.length === 0) {
+        return;
+    }
+
+    const used = sheet.getUsedRange();
+    const nextRow = used ? used.getRowCount() : 1;
+
+    sheet
+        .getRangeByIndexes(nextRow, 0, rows.length, columnCount)
+        .setValues(rows);
+}
+
+interface SplitResult {
+    headers: string[];
+    kept: Cell[][];
+    foundationEstate: Cell[][];
+    trust: Cell[][];
+    removedCount: number;
+}
+
+/**
+ * Splits a sheet's data rows into kept rows and rows to move.
+ * Returns null if the sheet has no data rows.
+ *
+ * Moved rows are trimmed to `recordColumnCount` columns (the original
+ * record, without helper columns); pass null to keep every column.
+ */
+function splitSheet(
+    sheet: ExcelScript.Worksheet,
+    recordColumnCount: number | null
+): SplitResult | null {
+    const range = sheet.getUsedRange();
+
+    if (!range) {
+        return null;
+    }
+
+    const values = range.getValues() as Cell[][];
+
+    if (values.length < 2) {
+        return null;
+    }
+
+    const headers = values[0].map(v => String(v).trim());
+    const searchCols = SEARCH_COLUMNS.map(name => colIndex(headers, name));
+    const width = recordColumnCount ?? headers.length;
+
+    const kept: Cell[][] = [];
+    const foundationEstate: Cell[][] = [];
+    const trust: Cell[][] = [];
+
+    let removedCount = 0;
+
+    for (let i = 1; i < values.length; i++) {
+        const row = values[i];
+
+        let isFoundationEstate = false;
+        let isTrust = false;
+
+        for (const col of searchCols) {
+            const text = String(row[col] ?? "");
+
+            if (FOUNDATION_ESTATE_PATTERN.test(text)) {
+                isFoundationEstate = true;
+            }
+
+            if (TRUST_PATTERN.test(text)) {
+                isTrust = true;
+            }
+        }
+
+        if (!isFoundationEstate && !isTrust) {
+            kept.push(row);
+            continue;
+        }
+
+        const record = row.slice(0, width);
+
+        if (isFoundationEstate) {
+            foundationEstate.push(record);
+        }
+
+        if (isTrust) {
+            trust.push(record);
+        }
+
+        removedCount++;
+    }
+
+    return { headers, kept, foundationEstate, trust, removedCount };
+}
+
+function rewriteSheet(
+    sheet: ExcelScript.Worksheet,
+    split: SplitResult
+): void {
+    const range = sheet.getUsedRange();
+
+    // Clear contents only, so header styling and number formats stay.
+    range.clear(ExcelScript.ClearApplyTo.contents);
+
+    const rebuilt: Cell[][] = [split.headers, ...split.kept];
+
+    sheet
+        .getRangeByIndexes(0, 0, rebuilt.length, split.headers.length)
+        .setValues(rebuilt);
+}
+
+// --------------------------------------------------
+// MAIN
+// --------------------------------------------------
+
+function main(workbook: ExcelScript.Workbook): void {
+    const dataSheet = workbook.getActiveWorksheet();
+    const sheetName = dataSheet.getName();
+
+    if (
+        [
+            BACKUP_SHEET,
+            BLANK_ADDRESSES_SHEET,
+            ONE_WORD_SHEET,
+            CITY_IN_ADDRESS_SHEET,
+            APT_UNIT_SHEET,
+            NON_ZIP4_SHEET,
+            FOUNDATION_ESTATE_SHEET,
+            TRUST_SHEET
+        ].includes(sheetName)
+    ) {
+        throw new Error("Activate the donor data sheet first.");
+    }
+
+    if (!workbook.getWorksheet(BACKUP_SHEET)) {
+        throw new Error("Run Phase 1 first.");
+    }
+
+    const mainRange = dataSheet.getUsedRange();
+
+    if (!mainRange) {
+        throw new Error("No data found.");
+    }
+
+    const mainHeaders = (mainRange.getValues()[0] as Cell[]).map(
+        v => String(v).trim()
+    );
+
+    // Phase 1 adds helper columns after the original data columns,
+    // so everything left of "Original Row" is the original record.
+    const originalColumnCount = colIndex(mainHeaders, "Original Row");
+    const originalHeaders = mainHeaders.slice(0, originalColumnCount);
+
+    // ----------------------------------
+    // SPLIT MAIN SHEET AND REVIEW TABS
+    // ----------------------------------
+
+    // Store sheet NAMES only; Office Scripts doesn't allow keeping
+    // worksheet objects inside other objects or arrays.
+    const sources: { name: string; split: SplitResult }[] = [];
+
+    const mainSplit = splitSheet(dataSheet, originalColumnCount);
+
+    if (mainSplit) {
+        sources.push({ name: sheetName, split: mainSplit });
+    }
+
+    for (const tabName of SCAN_TABS) {
+        const tab = workbook.getWorksheet(tabName);
+
+        if (!tab) continue;
+
+        const split = splitSheet(tab, null);
+
+        if (split) {
+            sources.push({ name: tabName, split: split });
+        }
+    }
+
+    const allFoundationEstate: Cell[][] = [];
+    const allTrust: Cell[][] = [];
+
+    for (const source of sources) {
+        allFoundationEstate.push(...source.split.foundationEstate);
+        allTrust.push(...source.split.trust);
+    }
+
+    // ----------------------------------
+    // CREATE TABS AND MOVE ROWS
+    // ----------------------------------
+
+    const foundationEstateSheet = getOrCreateReviewSheet(
+        workbook,
+        FOUNDATION_ESTATE_SHEET,
+        originalHeaders,
+        FOUNDATION_ESTATE_TAB_COLOR
+    );
+
+    const trustSheet = getOrCreateReviewSheet(
+        workbook,
+        TRUST_SHEET,
+        originalHeaders,
+        TRUST_TAB_COLOR
+    );
+
+    appendRows(
+        foundationEstateSheet,
+        allFoundationEstate,
+        originalColumnCount
+    );
+
+    appendRows(trustSheet, allTrust, originalColumnCount);
+
+    // ----------------------------------
+    // REWRITE SOURCE SHEETS (only if rows moved)
+    // ----------------------------------
+
+    for (const source of sources) {
+        if (source.split.removedCount > 0) {
+            const sourceSheet = workbook.getWorksheet(source.name);
+
+            if (sourceSheet) {
+                rewriteSheet(sourceSheet, source.split);
+            }
+        }
+    }
+
+    const sourceSummary = sources
+        .map(s => `  ${s.name}: ${s.split.removedCount} removed`)
+        .join("\n");
+
+    console.log(
+        `PHASE 5 COMPLETE
+
+Rows copied to ${FOUNDATION_ESTATE_SHEET}: ${allFoundationEstate.length}
+Rows copied to ${TRUST_SHEET}: ${allTrust.length}
+
+Rows removed by source sheet:
+${sourceSummary}
+
+Remaining rows on main sheet: ${mainSplit ? mainSplit.kept.length : 0}`
+    );
+}
