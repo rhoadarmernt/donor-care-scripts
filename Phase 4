@@ -1,157 +1,178 @@
 /**
- * PHASE 4
- * ZIP+4 FORMAT VALIDATION
+ * PHASE 4 - ZIP+4 FORMAT VALIDATION
  *
- * Flags any ZIP code that is not exactly:
- * ####рез-####
+ * Run this ONCE after Phase 3, with the donor data worksheet active.
  *
- * Example of valid format:
- * 91342-1234
+ * Moves every row whose Billing Zip/Postal Code is not exactly
+ * #####-#### (example: 91342-1234) to a "Non-Zip+4 Addresses" tab.
+ * This includes blank ZIPs, 5-digit ZIPs, and foreign postal codes.
+ *
+ * Moved rows keep the original columns only (same layout as the
+ * Blank Addresses sheet). Nothing else in the data is changed.
  */
 
 type Cell = string | number | boolean;
 
-const SUMMARY_SHEET = "Summary";
+// --------------------------------------------------
+// SETTINGS
+// --------------------------------------------------
 
-function getColumn(headers: string[], name: string): number {
-  const index = headers.indexOf(name);
+const BACKUP_SHEET = "Raw Backup";
+const BLANK_ADDRESSES_SHEET = "Blank Addresses";
+const ONE_WORD_SHEET = "One Word Address";
+const CITY_IN_ADDRESS_SHEET = "City in Address";
+const APT_UNIT_SHEET = "Apt-Unit Duplicated";
+const NON_ZIP4_SHEET = "Non-Zip+4 Addresses";
 
-  if (index === -1) {
-    throw new Error(`Required column not found: ${name}`);
+const HEADER_COLOR = "#D9E1F2";
+const REVIEW_TAB_COLOR = "#FFC000";
+
+const ZIP_PLUS_4_PATTERN = /^\d{5}-\d{4}$/;
+
+// --------------------------------------------------
+// HELPERS
+// --------------------------------------------------
+
+function colIndex(headers: string[], name: string): number {
+  const idx = headers.indexOf(name);
+
+  if (idx === -1) {
+    throw new Error(`Column not found: "${name}"`);
   }
 
-  return index;
+  return idx;
 }
 
-function addFlag(
-  row: Cell[],
-  flagColumn: number,
-  reasonColumn: number,
-  suggestionColumn: number,
-  reason: string,
-  suggestion: string
-): void {
-  row[flagColumn] = "REVIEW";
+function getOrCreateReviewSheet(
+  workbook: ExcelScript.Workbook,
+  name: string,
+  headers: string[]
+): ExcelScript.Worksheet {
+  let sheet = workbook.getWorksheet(name);
 
-  const existingReason = String(row[reasonColumn] || "").trim();
-  const existingSuggestion = String(row[suggestionColumn] || "").trim();
+  if (!sheet) {
+    sheet = workbook.addWorksheet(name);
 
-  row[reasonColumn] = existingReason
-    ? `${existingReason}; ${reason}`
-    : reason;
+    const headerRange = sheet.getRangeByIndexes(0, 0, 1, headers.length);
 
-  row[suggestionColumn] = existingSuggestion
-    ? `${existingSuggestion}; ${suggestion}`
-    : suggestion;
+    headerRange.setValues([headers]);
+    headerRange.getFormat().getFont().setBold(true);
+    headerRange.getFormat().getFill().setColor(HEADER_COLOR);
+
+    sheet.getFreezePanes().freezeRows(1);
+    sheet.setTabColor(REVIEW_TAB_COLOR);
+  }
+
+  return sheet;
 }
 
-function appendSummary(
-  summarySheet: ExcelScript.Worksheet,
-  rows: Cell[][]
+function appendRows(
+  sheet: ExcelScript.Worksheet,
+  rows: Cell[][],
+  columnCount: number
 ): void {
-  if (rows.length === 0) return;
+  if (rows.length === 0) {
+    return;
+  }
 
-  const usedRange = summarySheet.getUsedRange();
-  const nextRow = usedRange ? usedRange.getRowCount() : 0;
+  const used = sheet.getUsedRange();
+  const nextRow = used ? used.getRowCount() : 1;
 
-  summarySheet
-    .getRangeByIndexes(nextRow, 0, rows.length, 2)
+  sheet
+    .getRangeByIndexes(nextRow, 0, rows.length, columnCount)
     .setValues(rows);
 }
 
+// --------------------------------------------------
+// MAIN
+// --------------------------------------------------
+
 function main(workbook: ExcelScript.Workbook): void {
   const dataSheet = workbook.getActiveWorksheet();
-  const summarySheet = workbook.getWorksheet(SUMMARY_SHEET);
+  const sheetName = dataSheet.getName();
 
-  if (!summarySheet) {
-    throw new Error(`Worksheet not found: ${SUMMARY_SHEET}`);
+  if (
+    [
+      BACKUP_SHEET,
+      BLANK_ADDRESSES_SHEET,
+      ONE_WORD_SHEET,
+      CITY_IN_ADDRESS_SHEET,
+      APT_UNIT_SHEET,
+      NON_ZIP4_SHEET
+    ].includes(sheetName)
+  ) {
+    throw new Error("Activate the donor data sheet first.");
   }
 
-  if (dataSheet.getName() === SUMMARY_SHEET) {
-    throw new Error(
-      "Select the primary data worksheet before running Phase 4."
-    );
+  if (!workbook.getWorksheet(BACKUP_SHEET)) {
+    throw new Error("Run Phase 1 first.");
   }
 
-  const dataRange = dataSheet.getUsedRange();
+  const used = dataSheet.getUsedRange();
 
-  if (!dataRange) {
-    throw new Error("The active worksheet contains no data.");
+  if (!used) {
+    throw new Error("No data found.");
   }
 
-  const values = dataRange.getValues() as Cell[][];
+  const values = used.getValues() as Cell[][];
 
   if (values.length < 2) {
-    throw new Error(
-      "The active worksheet must contain headers and at least one data row."
-    );
+    throw new Error("The sheet needs headers and at least one data row.");
   }
 
-  const headers = values[0].map(value => String(value).trim());
+  const headers = values[0].map(v => String(v).trim());
 
-  const zipColumn = getColumn(
-    headers,
-    "Billing Zip/Postal Code"
-  );
+  // Phase 1 adds helper columns after the original data columns,
+  // so everything left of "Original Row" is the original record.
+  const originalColumnCount = colIndex(headers, "Original Row");
+  const originalHeaders = headers.slice(0, originalColumnCount);
 
-  const flagColumn = getColumn(
-    headers,
-    "Flag"
-  );
+  const cZip = colIndex(headers, "Billing Zip/Postal Code");
 
-  const reasonColumn = getColumn(
-    headers,
-    "Flag Reason"
-  );
+  const kept: Cell[][] = [];
+  const nonZip4Rows: Cell[][] = [];
 
-  const suggestionColumn = getColumn(
-    headers,
-    "Suggested Fix"
-  );
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
 
-  const zipPlus4Pattern = /^\d{5}-\d{4}$/;
+    const zip = String(row[cZip] ?? "").trim();
 
-  let zipFlagCount = 0;
-
-  for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
-    const row = values[rowIndex];
-    const zip = String(row[zipColumn] || "").trim();
-
-    if (!zipPlus4Pattern.test(zip)) {
-      addFlag(
-        row,
-        flagColumn,
-        reasonColumn,
-        suggestionColumn,
-        "ZIP is not in ZIP+4 format",
-        "Enter ZIP as #####-####"
-      );
-
-      zipFlagCount++;
+    if (ZIP_PLUS_4_PATTERN.test(zip)) {
+      kept.push(row);
+    } else {
+      nonZip4Rows.push(row.slice(0, originalColumnCount));
     }
   }
 
-  const rowCount = values.length;
+  // ----------------------------------
+  // CREATE REVIEW TAB AND MOVE ROWS
+  // ----------------------------------
 
-  dataSheet
-    .getRangeByIndexes(0, flagColumn, rowCount, 1)
-    .setValues(values.map(row => [row[flagColumn]]));
-
-  dataSheet
-    .getRangeByIndexes(0, reasonColumn, rowCount, 1)
-    .setValues(values.map(row => [row[reasonColumn]]));
-
-  dataSheet
-    .getRangeByIndexes(0, suggestionColumn, rowCount, 1)
-    .setValues(values.map(row => [row[suggestionColumn]]));
-
-  appendSummary(
-    summarySheet,
-    [["Phase 4: ZIP+4 format flags", zipFlagCount]]
+  const nonZip4Sheet = getOrCreateReviewSheet(
+    workbook, NON_ZIP4_SHEET, originalHeaders
   );
 
+  appendRows(nonZip4Sheet, nonZip4Rows, originalColumnCount);
+
+  // ----------------------------------
+  // REWRITE DATA SHEET (only if rows moved)
+  // ----------------------------------
+
+  if (nonZip4Rows.length > 0) {
+    // Clear contents only, so header styling and number formats stay.
+    used.clear(ExcelScript.ClearApplyTo.contents);
+
+    const rebuilt: Cell[][] = [headers, ...kept];
+
+    dataSheet
+      .getRangeByIndexes(0, 0, rebuilt.length, headers.length)
+      .setValues(rebuilt);
+  }
+
   console.log(
-    `PHASE 4 COMPLETE\n` +
-    `ZIP+4 format flags: ${zipFlagCount}`
+    `PHASE 4 COMPLETE
+
+Rows moved to ${NON_ZIP4_SHEET}: ${nonZip4Rows.length}
+Remaining rows: ${kept.length}`
   );
 }
