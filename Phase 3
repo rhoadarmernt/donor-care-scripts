@@ -1,75 +1,71 @@
 /**
- * PHASE 3
- * STREET ADDRESS DUPLICATE AND CITY REVIEW
+ * PHASE 3 - STREET ADDRESS REVIEW
  *
- * Automatically fixes:
- *   1. Entire duplicated addresses
- *      456 Oak Ave 456 Oak Ave
- *      -> 456 Oak Ave
+ * Run this ONCE after Phase 2, with the donor data worksheet active.
  *
- *   2. Repeated street-ending phrases
- *      123 Main St Main St
- *      -> 123 Main St
+ * Moves rows out of the main sheet into review tabs:
+ *   1. "One Word Address"     - Billing Street is exactly one word
+ *   2. "City in Address"      - Billing Street contains the Billing City
+ *   3. "Apt/Unit Duplicated"  - Billing Street has possible duplicate
+ *                               Apt/Unit text
  *
- * Flags:
- *   1. A street address containing exactly one word
- *   2. A street address containing the Billing City
- *   3. Possible duplicate Apt/Unit text
+ * A row that matches more than one check is copied to each matching
+ * tab, but removed from the main sheet only once.
  *
- * Does not:
- *   - Change capitalization
- *   - Correct spelling
- *   - Standardize street suffixes
- *   - Flag blank street addresses
- *   - Flag addresses based on a maximum word count
- *
- * Requires:
- *   - Phase 1 completed
- *   - Phase 2 completed
+ * Moved rows keep the original columns only (same layout as the
+ * Blank Addresses sheet). Nothing else in the data is changed.
  */
 
 type Cell = string | number | boolean;
 
+// --------------------------------------------------
+// SETTINGS
+// --------------------------------------------------
+
 const BACKUP_SHEET = "Raw Backup";
-const LOG_SHEET = "Changes Log";
-const SUMMARY_SHEET = "Summary";
+const BLANK_ADDRESSES_SHEET = "Blank Addresses";
+const ONE_WORD_SHEET = "One Word Address";
+const CITY_IN_ADDRESS_SHEET = "City in Address";
+const APT_UNIT_SHEET = "Apt-Unit Duplicated";
 
-// ----------------------------------------------------
-// GENERAL HELPERS
-// ----------------------------------------------------
+const HEADER_COLOR = "#D9E1F2";
+const REVIEW_TAB_COLOR = "#FFC000";
 
-function getColumnIndex(
-  headers: string[],
-  columnName: string
-): number {
-  const index = headers.indexOf(columnName);
+// --------------------------------------------------
+// HELPERS
+// --------------------------------------------------
 
-  if (index === -1) {
-    throw new Error(`Required column not found: ${columnName}`);
+function colIndex(headers: string[], name: string): number {
+  const idx = headers.indexOf(name);
+
+  if (idx === -1) {
+    throw new Error(`Column not found: "${name}"`);
   }
 
-  return index;
+  return idx;
 }
 
-function createLogEntry(
-  originalRow: Cell,
-  accountId: Cell,
-  column: string,
-  oldValue: Cell,
-  newValue: Cell,
-  rule: string,
-  action: string
-): Cell[] {
-  return [
-    originalRow,
-    accountId,
-    column,
-    oldValue,
-    newValue,
-    rule,
-    action,
-    new Date().toISOString()
-  ];
+function getOrCreateReviewSheet(
+  workbook: ExcelScript.Workbook,
+  name: string,
+  headers: string[]
+): ExcelScript.Worksheet {
+  let sheet = workbook.getWorksheet(name);
+
+  if (!sheet) {
+    sheet = workbook.addWorksheet(name);
+
+    const headerRange = sheet.getRangeByIndexes(0, 0, 1, headers.length);
+
+    headerRange.setValues([headers]);
+    headerRange.getFormat().getFont().setBold(true);
+    headerRange.getFormat().getFill().setColor(HEADER_COLOR);
+
+    sheet.getFreezePanes().freezeRows(1);
+    sheet.setTabColor(REVIEW_TAB_COLOR);
+  }
+
+  return sheet;
 }
 
 function appendRows(
@@ -81,102 +77,23 @@ function appendRows(
     return;
   }
 
-  const usedRange = sheet.getUsedRange();
-  const nextRow = usedRange
-    ? usedRange.getRowCount()
-    : 0;
+  const used = sheet.getUsedRange();
+  const nextRow = used ? used.getRowCount() : 1;
 
   sheet
-    .getRangeByIndexes(
-      nextRow,
-      0,
-      rows.length,
-      columnCount
-    )
+    .getRangeByIndexes(nextRow, 0, rows.length, columnCount)
     .setValues(rows);
-}
-
-function writeColumn(
-  sheet: ExcelScript.Worksheet,
-  values: Cell[][],
-  columnIndex: number
-): void {
-  const columnValues = values.map(
-    row => [row[columnIndex]]
-  );
-
-  sheet
-    .getRangeByIndexes(
-      0,
-      columnIndex,
-      columnValues.length,
-      1
-    )
-    .setValues(columnValues);
-}
-
-// ----------------------------------------------------
-// FLAG HELPERS
-// ----------------------------------------------------
-
-function appendUniqueText(
-  currentValue: Cell,
-  newText: string
-): string {
-  const current = String(currentValue || "").trim();
-
-  if (current === "") {
-    return newText;
-  }
-
-  const existingItems = current
-    .split(";")
-    .map(item => item.trim().toLowerCase());
-
-  if (existingItems.includes(newText.toLowerCase())) {
-    return current;
-  }
-
-  return `${current}; ${newText}`;
-}
-
-function addFlag(
-  row: Cell[],
-  flagColumn: number,
-  reasonColumn: number,
-  suggestionColumn: number,
-  reason: string,
-  suggestion: string
-): void {
-  row[flagColumn] = "REVIEW";
-
-  row[reasonColumn] = appendUniqueText(
-    row[reasonColumn],
-    reason
-  );
-
-  row[suggestionColumn] = appendUniqueText(
-    row[suggestionColumn],
-    suggestion
-  );
 }
 
 function getWordCount(value: string): number {
   const trimmed = value.trim();
 
-  if (trimmed === "") {
-    return 0;
-  }
-
-  return trimmed.split(/\s+/).length;
+  return trimmed === "" ? 0 : trimmed.split(/\s+/).length;
 }
 
 /**
  * Normalizes text for city-name comparison.
- *
- * Examples:
- *   "St. Louis" -> "st louis"
- *   "LOS ANGELES," -> "los angeles"
+ * "St. Louis" -> "st louis"
  */
 function normalizeForComparison(value: string): string {
   return value
@@ -187,476 +104,153 @@ function normalizeForComparison(value: string): string {
 }
 
 /**
- * Determines whether the full city name appears in the
- * street address as a complete word or phrase.
- *
- * This prevents a city such as "York" from matching
- * a word such as "Yorkshire."
+ * True when the full city name appears in the street as a complete
+ * word or phrase ("York" will not match "Yorkshire").
  */
-function streetContainsCity(
-  street: string,
-  city: string
-): boolean {
+function streetContainsCity(street: string, city: string): boolean {
   const normalizedStreet = normalizeForComparison(street);
   const normalizedCity = normalizeForComparison(city);
 
-  if (
-    normalizedStreet === "" ||
-    normalizedCity === ""
-  ) {
+  if (normalizedStreet === "" || normalizedCity === "") {
     return false;
   }
 
-  return ` ${normalizedStreet} `.includes(
-    ` ${normalizedCity} `
+  return ` ${normalizedStreet} `.includes(` ${normalizedCity} `);
+}
+
+function hasDuplicateAptUnit(street: string): boolean {
+  return (
+    /\bapt\.?\s+\S+.*\bapt\.?\s+\S+/i.test(street) ||
+    /\bunit\s+\S+.*\bunit\s+\S+/i.test(street)
   );
 }
 
-// ----------------------------------------------------
-// DUPLICATE STREET DETECTION
-// ----------------------------------------------------
-
-function removeEntireDuplicateAddress(
-  street: string
-): string | null {
-  const words = street.trim().split(/\s+/);
-
-  if (
-    words.length < 4 ||
-    words.length % 2 !== 0
-  ) {
-    return null;
-  }
-
-  const midpoint = words.length / 2;
-  const firstHalf = words.slice(0, midpoint).join(" ");
-  const secondHalf = words.slice(midpoint).join(" ");
-
-  if (
-    firstHalf.toLowerCase() ===
-    secondHalf.toLowerCase()
-  ) {
-    return firstHalf;
-  }
-
-  return null;
-}
-
-function removeRepeatedEnding(
-  street: string
-): string | null {
-  const suffixes = [
-    "street",
-    "st",
-    "st.",
-    "avenue",
-    "ave",
-    "ave.",
-    "road",
-    "rd",
-    "rd.",
-    "drive",
-    "dr",
-    "dr.",
-    "lane",
-    "ln",
-    "ln.",
-    "court",
-    "ct",
-    "ct.",
-    "boulevard",
-    "blvd",
-    "blvd.",
-    "place",
-    "pl",
-    "pl.",
-    "parkway",
-    "pkwy",
-    "pkwy.",
-    "highway",
-    "hwy",
-    "hwy.",
-    "way",
-    "circle",
-    "cir",
-    "cir.",
-    "terrace",
-    "ter",
-    "ter.",
-    "trail",
-    "trl",
-    "trl."
-  ];
-
-  for (let index = 0; index < suffixes.length; index++) {
-    const escapedSuffix = suffixes[index].replace(
-      ".",
-      "\\."
-    );
-
-    const pattern = new RegExp(
-      `(.*)\\s+([^\\s]+\\s+${escapedSuffix})\\s+\\2$`,
-      "i"
-    );
-
-    const match = street.match(pattern);
-
-    if (match) {
-      return `${match[1].trim()} ${match[2].trim()}`;
-    }
-  }
-
-  return null;
-}
-
-// ----------------------------------------------------
+// --------------------------------------------------
 // MAIN
-// ----------------------------------------------------
+// --------------------------------------------------
 
 function main(workbook: ExcelScript.Workbook): void {
   const dataSheet = workbook.getActiveWorksheet();
+  const sheetName = dataSheet.getName();
 
-  const excludedSheets = [
-    BACKUP_SHEET,
-    LOG_SHEET,
-    SUMMARY_SHEET
-  ];
-
-  if (excludedSheets.includes(dataSheet.getName())) {
-    throw new Error(
-      "Activate the donor data worksheet before running Phase 3."
-    );
+  if (
+    [
+      BACKUP_SHEET,
+      BLANK_ADDRESSES_SHEET,
+      ONE_WORD_SHEET,
+      CITY_IN_ADDRESS_SHEET,
+      APT_UNIT_SHEET
+    ].includes(sheetName)
+  ) {
+    throw new Error("Activate the donor data sheet first.");
   }
 
-  const logSheet = workbook.getWorksheet(LOG_SHEET);
-  const summarySheet = workbook.getWorksheet(SUMMARY_SHEET);
-
-  if (!logSheet || !summarySheet) {
-    throw new Error(
-      `The "${LOG_SHEET}" or "${SUMMARY_SHEET}" worksheet is missing.`
-    );
+  if (!workbook.getWorksheet(BACKUP_SHEET)) {
+    throw new Error("Run Phase 1 first.");
   }
 
-  const usedRange = dataSheet.getUsedRange();
+  const used = dataSheet.getUsedRange();
 
-  if (!usedRange) {
-    throw new Error("The active worksheet contains no data.");
+  if (!used) {
+    throw new Error("No data found.");
   }
 
-  const values = usedRange.getValues() as Cell[][];
+  const values = used.getValues() as Cell[][];
 
   if (values.length < 2) {
-    throw new Error(
-      "The active worksheet must contain headers and at least one data row."
-    );
+    throw new Error("The sheet needs headers and at least one data row.");
   }
 
-  const headers = values[0].map(
-    value => String(value).trim()
-  );
+  const headers = values[0].map(v => String(v).trim());
 
-  const columns = {
-    street: getColumnIndex(
-      headers,
-      "Billing Street"
-    ),
-    city: getColumnIndex(
-      headers,
-      "Billing City"
-    ),
-    originalRow: getColumnIndex(
-      headers,
-      "Original Row"
-    ),
-    accountId: getColumnIndex(
-      headers,
-      "Account Case Safe ID"
-    ),
-    flag: getColumnIndex(
-      headers,
-      "Flag"
-    ),
-    reason: getColumnIndex(
-      headers,
-      "Flag Reason"
-    ),
-    suggestion: getColumnIndex(
-      headers,
-      "Suggested Fix"
-    )
-  };
+  // Phase 1 adds helper columns after the original data columns,
+  // so everything left of "Original Row" is the original record.
+  const originalColumnCount = colIndex(headers, "Original Row");
+  const originalHeaders = headers.slice(0, originalColumnCount);
 
-  const logEntries: Cell[][] = [];
+  const cStreet = colIndex(headers, "Billing Street");
+  const cCity = colIndex(headers, "Billing City");
 
-  let duplicateFixCount = 0;
-  let oneWordFlagCount = 0;
-  let cityInStreetFlagCount = 0;
-  let duplicateUnitFlagCount = 0;
-  let totalFlaggedRowCount = 0;
+  const kept: Cell[][] = [];
+  const oneWordRows: Cell[][] = [];
+  const cityInAddressRows: Cell[][] = [];
+  const aptUnitRows: Cell[][] = [];
 
-  for (
-    let rowIndex = 1;
-    rowIndex < values.length;
-    rowIndex++
-  ) {
-    const row = values[rowIndex];
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
 
-    const originalRow = row[columns.originalRow];
-    const accountId = row[columns.accountId];
+    const street = String(row[cStreet] ?? "").trim();
+    const city = String(row[cCity] ?? "").trim();
 
-    let street = String(
-      row[columns.street] || ""
-    ).trim();
+    const originalRecord = row.slice(0, originalColumnCount);
 
-    const city = String(
-      row[columns.city] || ""
-    ).trim();
+    let moved = false;
 
-    let rowFlaggedByPhase = false;
-
-    // ------------------------------------------------
-    // ENTIRE DUPLICATE ADDRESS
-    // ------------------------------------------------
-
-    const entireDuplicate =
-      removeEntireDuplicateAddress(street);
-
-    if (entireDuplicate) {
-      logEntries.push(
-        createLogEntry(
-          originalRow,
-          accountId,
-          "Billing Street",
-          street,
-          entireDuplicate,
-          "Duplicate street text",
-          "Auto-fixed"
-        )
-      );
-
-      street = entireDuplicate;
-      duplicateFixCount++;
+    if (getWordCount(street) === 1) {
+      oneWordRows.push(originalRecord);
+      moved = true;
     }
-
-    // ------------------------------------------------
-    // REPEATED ENDING PHRASE
-    // ------------------------------------------------
-
-    const repeatedEnding =
-      removeRepeatedEnding(street);
-
-    if (
-      repeatedEnding &&
-      repeatedEnding !== street
-    ) {
-      const oldStreet = street;
-
-      street = repeatedEnding;
-      duplicateFixCount++;
-
-      logEntries.push(
-        createLogEntry(
-          originalRow,
-          accountId,
-          "Billing Street",
-          oldStreet,
-          street,
-          "Duplicate street phrase",
-          "Auto-fixed"
-        )
-      );
-    }
-
-    row[columns.street] = street;
-
-    // ------------------------------------------------
-    // ONE-WORD ADDRESS
-    // ------------------------------------------------
-
-    const wordCount = getWordCount(street);
-
-    if (wordCount === 1) {
-      const reason =
-        "Street address contains only one word";
-
-      addFlag(
-        row,
-        columns.flag,
-        columns.reason,
-        columns.suggestion,
-        reason,
-        "Verify the complete street address"
-      );
-
-      logEntries.push(
-        createLogEntry(
-          originalRow,
-          accountId,
-          "Billing Street",
-          street,
-          street,
-          reason,
-          "Flagged"
-        )
-      );
-
-      oneWordFlagCount++;
-      rowFlaggedByPhase = true;
-    }
-
-    // ------------------------------------------------
-    // CITY NAME FOUND IN STREET ADDRESS
-    // ------------------------------------------------
 
     if (streetContainsCity(street, city)) {
-      const reason =
-        "City name found in street address";
-
-      addFlag(
-        row,
-        columns.flag,
-        columns.reason,
-        columns.suggestion,
-        reason,
-        `Remove "${city}" from Billing Street if inappropriate`
-      );
-
-      logEntries.push(
-        createLogEntry(
-          originalRow,
-          accountId,
-          "Billing Street",
-          street,
-          street,
-          reason,
-          "Flagged"
-        )
-      );
-
-      cityInStreetFlagCount++;
-      rowFlaggedByPhase = true;
+      cityInAddressRows.push(originalRecord);
+      moved = true;
     }
 
-    // ------------------------------------------------
-    // DUPLICATE APARTMENT OR UNIT TEXT
-    // ------------------------------------------------
-
-    const hasDuplicateApartment =
-      /\bapt\.?\s+\S+.*\bapt\.?\s+\S+/i
-        .test(street);
-
-    const hasDuplicateUnit =
-      /\bunit\s+\S+.*\bunit\s+\S+/i
-        .test(street);
-
-    if (
-      hasDuplicateApartment ||
-      hasDuplicateUnit
-    ) {
-      const reason =
-        "Possible duplicate apartment/unit text";
-
-      addFlag(
-        row,
-        columns.flag,
-        columns.reason,
-        columns.suggestion,
-        reason,
-        "Verify apartment or unit information"
-      );
-
-      logEntries.push(
-        createLogEntry(
-          originalRow,
-          accountId,
-          "Billing Street",
-          street,
-          street,
-          reason,
-          "Flagged"
-        )
-      );
-
-      duplicateUnitFlagCount++;
-      rowFlaggedByPhase = true;
+    if (hasDuplicateAptUnit(street)) {
+      aptUnitRows.push(originalRecord);
+      moved = true;
     }
 
-    if (rowFlaggedByPhase) {
-      totalFlaggedRowCount++;
+    if (!moved) {
+      kept.push(row);
     }
   }
 
-  // ----------------------------------------------------
-  // WRITE MODIFIED COLUMNS
-  // ----------------------------------------------------
+  // ----------------------------------
+  // CREATE REVIEW TABS
+  // ----------------------------------
 
-  writeColumn(
-    dataSheet,
-    values,
-    columns.street
+  const oneWordSheet = getOrCreateReviewSheet(
+    workbook, ONE_WORD_SHEET, originalHeaders
   );
 
-  writeColumn(
-    dataSheet,
-    values,
-    columns.flag
+  const citySheet = getOrCreateReviewSheet(
+    workbook, CITY_IN_ADDRESS_SHEET, originalHeaders
   );
 
-  writeColumn(
-    dataSheet,
-    values,
-    columns.reason
+  const aptUnitSheet = getOrCreateReviewSheet(
+    workbook, APT_UNIT_SHEET, originalHeaders
   );
 
-  writeColumn(
-    dataSheet,
-    values,
-    columns.suggestion
-  );
+  appendRows(oneWordSheet, oneWordRows, originalColumnCount);
+  appendRows(citySheet, cityInAddressRows, originalColumnCount);
+  appendRows(aptUnitSheet, aptUnitRows, originalColumnCount);
 
-  // ----------------------------------------------------
-  // LOG AND SUMMARY
-  // ----------------------------------------------------
+  // ----------------------------------
+  // REWRITE DATA SHEET (only if rows moved)
+  // ----------------------------------
 
-  appendRows(
-    logSheet,
-    logEntries,
-    8
-  );
+  const removedCount = values.length - 1 - kept.length;
 
-  appendRows(
-    summarySheet,
-    [
-      [
-        "Phase 3: duplicate street fixes",
-        duplicateFixCount
-      ],
-      [
-        "Phase 3: one-word street addresses",
-        oneWordFlagCount
-      ],
-      [
-        "Phase 3: city found in street address",
-        cityInStreetFlagCount
-      ],
-      [
-        "Phase 3: duplicate Apt/Unit flags",
-        duplicateUnitFlagCount
-      ],
-      [
-        "Phase 3: total rows flagged",
-        totalFlaggedRowCount
-      ]
-    ],
-    2
-  );
+  if (removedCount > 0) {
+    // Clear contents only, so header styling and number formats stay.
+    used.clear(ExcelScript.ClearApplyTo.contents);
+
+    const rebuilt: Cell[][] = [headers, ...kept];
+
+    dataSheet
+      .getRangeByIndexes(0, 0, rebuilt.length, headers.length)
+      .setValues(rebuilt);
+  }
 
   console.log(
-    `PHASE 3 COMPLETE\n` +
-    `Duplicate street fixes: ${duplicateFixCount}\n` +
-    `One-word street addresses: ${oneWordFlagCount}\n` +
-    `City found in street address: ${cityInStreetFlagCount}\n` +
-    `Duplicate Apt/Unit flags: ${duplicateUnitFlagCount}\n` +
-    `Total rows flagged: ${totalFlaggedRowCount}`
+    `PHASE 3 COMPLETE
+
+One Word Address: ${oneWordRows.length}
+City in Address: ${cityInAddressRows.length}
+Apt/Unit Duplicated: ${aptUnitRows.length}
+
+Rows removed from main sheet: ${removedCount}
+Remaining rows: ${kept.length}`
   );
 }
